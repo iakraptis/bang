@@ -205,6 +205,10 @@
           life: position.life,
           side: player.side,
           own,
+          // What is bolted to this character right now. The 3D stage keeps
+          // these standing on the field for as long as the board says they
+          // are in play, so it needs the row rather than only the arrivals.
+          equipment: (position.equipment || []).map(card => card.key),
           zone: `${own ? "own" : "opponent"}_${position.role === "active" ? "active" : "rearguard"}`,
         });
       }

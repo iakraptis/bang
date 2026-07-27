@@ -194,6 +194,7 @@
   const GUN_METAL = "#6f7378";
   const GUN_DARK = "#3d4045";
   const WOOD = "#6b4527";
+  const BRASS = "#c9a44c";
 
   /* Every card that reaches the table drops a prop onto the battlefield.
      Shapes are shared — a Colt and a Schofield are both revolvers — and the
@@ -216,8 +217,8 @@
     rattlesnake: { prop: "snake", tint: "#7fbe5e" },
     beer: { prop: "mug", tint: "#c9922f" },
     strong_ale: { prop: "mug", tint: "#8a4f22" },
-    missed: { prop: "shield", tint: "#8fc7e0" },
-    return_fire: { prop: "shield", tint: "#c98d5a" },
+    missed: { prop: "slug", tint: "#c8ccd2" },
+    return_fire: { prop: "ricochet", tint: "#c98d5a" },
     barrel: { prop: "barrel", tint: "#7d5630" },
     hat: { prop: "hatprop", tint: "#6b4a30" },
     gun_belt: { prop: "belt", tint: LEATHER },
@@ -225,11 +226,15 @@
     bank: { prop: "safe", tint: "#4f5560" },
     clock: { prop: "clock", tint: "#c9a44c" },
     stealing: { prop: "hand", tint: "#e0b98c" },
-    schoolmarm: { prop: "hand", tint: "#d8c0a0" },
+    schoolmarm: { prop: "book", tint: "#8a4636" },
     general_store: { prop: "cards", tint: "#e4dcc0" },
     wagon: { prop: "wagon", tint: "#8a6a44" },
-    water: { prop: "flask", tint: "#5a8fa8" },
-    stampede: { prop: "boot", tint: "#5a4030" },
+    water: { prop: "bucket", tint: "#5a8fa8" },
+    stampede: { prop: "steer", tint: "#6b4a30" },
+    /* Not a card — a single card. A great deal of this game is cards moving
+       between hands, and on the battlefield that has to be a thing you can
+       watch cross the dust. */
+    loose_card: { prop: "chit", tint: "#e8dcc0" },
   };
 
   const DEFAULT_PROP = { prop: "cards", tint: "#d8cbb0" };
@@ -250,6 +255,19 @@
           for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y += 1) {
             for (let z = Math.min(z0, z1); z <= Math.max(z0, z1); z += 1) {
               this.set(x, y, z, color);
+            }
+          }
+        }
+      },
+      // Take a box back out again. A poncho or a duster is painted across the
+      // whole span of the shoulders before the arms go on, so a figure whose
+      // gun arm is being lifted out into its own piece has to have that column
+      // cleared or the coat keeps an arm-shaped stub where the arm used to be.
+      clear(x0, y0, z0, x1, y1, z1) {
+        for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x += 1) {
+          for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y += 1) {
+            for (let z = Math.min(z0, z1); z <= Math.max(z0, z1); z += 1) {
+              cells.delete(`${x}|${y}|${z}`);
             }
           }
         }
@@ -343,15 +361,46 @@
     }
   }
 
-  function armsAndHands(out, traits, hw) {
+  /* One arm is the gun arm, and the stage needs it on a hinge: a figure that
+     cannot raise an arm cannot aim, and a Winchester that hangs in mid-air
+     beside a static sleeve reads as a bug rather than a draw. `skipArm` leaves
+     that side out of the body so `buildArm` can supply it as its own piece,
+     pivoting at the shoulder. Everything else about the figure is unchanged,
+     and a full build (no skip) still produces the whole character. */
+  const ARM_SIDE = 1;
+
+  function armsAndHands(out, traits, hw, skipArm) {
     // The sleeves are a shade off the coat: same cloth, but without the break
     // the arms and the chest merge into one wide slab from any distance.
     const sleeve = shade(traits.coat, -22);
     for (const side of [-1, 1]) {
+      if (skipArm && side === ARM_SIDE) continue;
       const x = side * (hw + 1);
       out.box(x, HEIGHTS.torso, -1, x, HEIGHTS.shoulder, 1, sleeve);
       out.box(x, HEIGHTS.belt, -1, x, HEIGHTS.torso - 1, 1, traits.skin);
     }
+  }
+
+  /* The gun arm on its own, in the hinge's coordinates: the shoulder joint is
+     the origin and the arm hangs straight down from it, so rotating the piece
+     about x swings it from resting at the hip to level with the horizon. The
+     hand is the last voxel down, and whatever the character is holding hangs
+     off that point. */
+  function buildArm(traits, hw) {
+    const out = grid();
+    const sleeve = shade(traits.coat, -22);
+    const cuff = HEIGHTS.torso - HEIGHTS.shoulder;              // -5
+    const wrist = HEIGHTS.belt - HEIGHTS.shoulder;              // -6
+    out.box(0, 0, -1, 0, cuff, 1, sleeve);
+    out.box(0, cuff - 1, -1, 0, wrist, 1, traits.skin);
+    return {
+      voxels: out.list(),
+      // Where the arm hangs from, in the figure's own grid.
+      pivot: [ARM_SIDE * (hw + 1), HEIGHTS.shoulder, 0],
+      // Where the grip of a held weapon sits, in the hinge's coordinates.
+      hand: [0, wrist, 1],
+      length: -wrist,
+    };
   }
 
   function neckAndHead(out, traits) {
@@ -452,12 +501,13 @@
     }
   }
 
-  function weapon(out, traits, hw) {
+  function weapon(out, traits, hw, skipArm) {
     const x = hw + 1;
     const y = HEIGHTS.torso - 1;
     switch (traits.weapon) {
       case "twin":
         for (const side of [-1, 1]) {
+          if (skipArm && side === ARM_SIDE) continue;
           out.box(side * x, y, 2, side * x, y, 3, GUN_METAL);
           out.set(side * x, y - 1, 2, GUN_DARK);
         }
@@ -480,10 +530,18 @@
         out.set(3, HEIGHTS.head + 1, 3, "#e2553b");
         break;
       default: // revolver
+        if (skipArm) break;   // it goes in the hinged hand instead
         out.box(x, y, 2, x, y, 3, GUN_METAL);
         out.set(x, y - 1, 2, GUN_DARK);
         break;
     }
+  }
+
+  /* What a character is holding when nothing is happening. Gunhands keep a
+     revolver in the hinged hand so the draw has something to draw; a rifle,
+     a hand of cards or a cigar are part of the body and stay there. */
+  function idleWeaponFor(traits) {
+    return traits.weapon === "revolver" || traits.weapon === "twin" ? "colt" : null;
   }
 
   function shade(hex, amount) {
@@ -494,23 +552,30 @@
     ].map(channel => channel.toString(16).padStart(2, "0")).join("");
   }
 
-  function figureInto(out, traits, offsetX = 0) {
+  function figureInto(out, traits, offsetX = 0, skipArm = false) {
     const hw = halfWidth(traits.build);
     const shifted = offsetX
       ? {
           set: (x, y, z, c) => out.set(x + offsetX, y, z, c),
           box: (x0, y0, z0, x1, y1, z1, c) =>
             out.box(x0 + offsetX, y0, z0, x1 + offsetX, y1, z1, c),
+          clear: (x0, y0, z0, x1, y1, z1) =>
+            out.clear(x0 + offsetX, y0, z0, x1 + offsetX, y1, z1),
         }
       : out;
     legsAndBoots(shifted, traits, hw);
     torso(shifted, traits, hw);
     garmentOverlay(shifted, traits, hw);
-    armsAndHands(shifted, traits, hw);
+    armsAndHands(shifted, traits, hw, skipArm);
     neckAndHead(shifted, traits);
     hair(shifted, traits);
     hat(shifted, traits);
-    weapon(shifted, traits, hw);
+    weapon(shifted, traits, hw, skipArm);
+    if (skipArm) {
+      // Exactly the arm's own footprint, no wider: a poncho still hangs over
+      // the shoulder at the edges, it just no longer fills the sleeve.
+      shifted.clear(ARM_SIDE * (hw + 1), HEIGHTS.belt, -1, ARM_SIDE * (hw + 1), HEIGHTS.shoulder, 1);
+    }
   }
 
   function traitsFor(key) {
@@ -518,21 +583,43 @@
   }
 
   /* A figure, as a flat voxel list plus the bounds the stage needs to sit it
-     on the ground and spin it about its own middle. */
+     on the ground and spin it about its own middle.
+
+     Two versions of the same character come back. `voxels` is the whole
+     figure, which is what anything drawing a still picture of them wants.
+     `body` is the same figure with the gun arm left off, and `arm` is that
+     arm on its own hinge — the stage draws those two as separate meshes so
+     the character can raise a weapon. The bounds are always the whole
+     figure's, so the arm coming off never moves anyone off their mark. */
   function buildFigure(key) {
     const traits = traitsFor(key);
-    const out = grid();
-    if (traits.trio) {
-      // The Daltons ride three abreast: a full figure flanked by two brothers
-      // half a step back, each in his own coat.
-      figureInto(out, traits, 0);
-      traits.trio.forEach((brother, index) => {
-        figureInto(out, { ...traits, ...brother }, (index === 0 ? -1 : 1) * (halfWidth(traits.build) + 4));
-      });
-    } else {
-      figureInto(out, traits);
-    }
-    return { key, traits, voxels: out.list(), bounds: bounds(out.list()) };
+    const build = skipArm => {
+      const out = grid();
+      if (traits.trio) {
+        /* The Daltons ride three abreast: a full figure flanked by two
+           brothers, each in his own coat. Only the middle one aims, and the
+           brothers stand clear of his gun arm rather than inside it — packed
+           any tighter and lifting that arm out onto its hinge would leave it
+           swinging through a brother's chest. */
+        figureInto(out, traits, 0, skipArm);
+        traits.trio.forEach((brother, index) => {
+          figureInto(out, { ...traits, ...brother }, (index === 0 ? -1 : 1) * (halfWidth(traits.build) + 7));
+        });
+      } else {
+        figureInto(out, traits, 0, skipArm);
+      }
+      return out.list();
+    };
+    const voxels = build(false);
+    return {
+      key,
+      traits,
+      voxels,
+      bounds: bounds(voxels),
+      body: build(true),
+      arm: buildArm(traits, halfWidth(traits.build)),
+      idleWeapon: idleWeaponFor(traits),
+    };
   }
 
   function bounds(voxels) {
@@ -672,6 +759,49 @@
       out.box(0, 1, -1, 1, 3, 1, tint);
       out.box(0, 4, -1, 1, 4, 1, shade(tint, 30));
     },
+    // A bullet going past rather than into: the thing a Missed! is about.
+    slug(out, tint) {
+      out.box(0, 0, 0, 2, 0, 0, tint);
+      out.set(3, 0, 0, shade(tint, 40));
+      out.box(-3, 0, 0, -1, 0, 0, "#8a7a5a");   // the streak behind it
+      out.set(-4, 1, 0, "#8a7a5a");
+      out.set(-4, -1, 0, "#8a7a5a");
+    },
+    // A shot turned round and sent back, with the spark where it bounced.
+    ricochet(out, tint) {
+      out.box(0, 0, 0, 2, 0, 0, tint);
+      out.box(2, 1, 0, 4, 3, 0, shade(tint, 45));
+      out.set(5, 4, 0, "#ffb347");
+      out.set(3, -1, 0, "#ffb347");
+    },
+    chit(out, tint) {
+      out.box(-1, -2, 0, 1, 2, 0, tint);
+      out.box(-1, 2, 0, 1, 2, 0, shade(tint, -25));
+      out.set(0, 0, 1, "#a5322b");
+      out.set(0, 0, -1, "#a5322b");
+    },
+    book(out, tint) {
+      out.box(-2, 0, -2, 2, 1, 2, tint);
+      out.box(-2, 2, -2, 2, 2, 2, "#e8dcc0");   // pages
+      out.box(-2, 0, -2, -2, 2, 2, shade(tint, -30));  // spine
+      out.set(2, 2, 0, "#c9a44c");              // clasp
+    },
+    bucket(out, tint) {
+      const pail = "#7d6a4a";
+      out.box(-2, 0, -2, 2, 3, 2, pail);
+      out.box(-2, 4, -2, 2, 4, 2, tint);        // the water in it
+      out.box(-3, 4, 0, 3, 5, 0, shade(pail, -25));    // handle
+      out.set(3, 5, 0, tint);
+      out.set(4, 6, 0, shade(tint, 35));        // a slop going over the side
+    },
+    steer(out, tint) {
+      out.box(-4, 2, -2, 3, 4, 1, tint);        // body
+      out.box(3, 3, -1, 5, 5, 1, shade(tint, 20));     // head
+      out.box(5, 6, -3, 6, 6, -2, "#e0d6bc");   // horns
+      out.box(5, 6, 2, 6, 6, 3, "#e0d6bc");
+      for (const x of [-3, 2]) for (const z of [-2, 2]) out.box(x, 0, z, x, 1, z, shade(tint, -30));
+      out.box(-5, 3, 0, -4, 5, 0, shade(tint, -20));   // tail
+    },
   };
 
   function buildProp(cardKey) {
@@ -683,13 +813,241 @@
     return { key: cardKey, prop: spec.prop, tint: spec.tint, voxels, bounds: bounds(voxels) };
   }
 
+  /* ---------- weapons in the hand ----------
+
+     A thrown prop and a held weapon are not the same object. A prop is seen
+     tumbling across the field at speed and only has to read as a silhouette;
+     a held weapon is seen at rest in somebody's fist, pointed at the person
+     they are about to shoot, and it has to be the gun that is printed on the
+     card — a Winchester is a long rifle with a lever, a Derringer is a palmed
+     stub, a Shotgun has two barrels.
+
+     They are built in the weapon's own frame: the grip is the origin, the
+     barrel runs along +x and the sights are +y, so `muzzle` is simply how far
+     down +x the bullet leaves from. The stage turns that frame to match
+     whichever hand is holding it. */
+
+  const HELD_WEAPONS = {
+    colt: { shape: "revolver", tint: GUN_METAL, barrel: 4 },
+    schofield: { shape: "revolver", tint: "#8a8f96", barrel: 5 },
+    remington: { shape: "revolver", tint: "#5c6066", barrel: 4 },
+    peacemaker: { shape: "revolver", tint: "#9aa0a6", barrel: 6 },
+    fanning: { shape: "revolver", tint: "#b0723a", barrel: 4 },
+    derringer: { shape: "derringer", tint: BRASS, barrel: 2 },
+    winchester: { shape: "rifle", tint: WOOD, barrel: 11 },
+    carbine: { shape: "rifle", tint: "#7d5630", barrel: 8 },
+    shotgun: { shape: "shotgun", tint: "#4a3527", barrel: 8 },
+    gatling: { shape: "gatling", tint: GUN_DARK, barrel: 9 },
+    knife: { shape: "knife", tint: "#b9bec4", barrel: 5 },
+    indians: { shape: "bow", tint: "#7d5630", barrel: 6 },
+    duel: { shape: "revolver", tint: GUN_METAL, barrel: 4 },
+  };
+
+  const WEAPON_BUILDERS = {
+    revolver(out, tint, barrel) {
+      out.box(-1, -3, 0, 0, -1, 0, WOOD);                    // grip
+      out.set(-1, -4, 0, WOOD);
+      out.box(0, -1, 0, 2, 0, 0, shade(tint, -25));          // frame
+      out.box(1, 0, -1, 2, 0, 1, tint);                      // cylinder
+      out.box(2, 0, 0, barrel + 2, 0, 0, tint);              // barrel
+      out.set(0, 1, 0, shade(tint, -45));                    // hammer
+      out.set(barrel + 2, 1, 0, shade(tint, 45));            // front sight
+      out.set(0, -2, 0, GUN_DARK);                           // trigger guard
+      return [barrel + 3, 0, 0];
+    },
+    derringer(out, tint, barrel) {
+      out.box(-1, -2, 0, 0, -1, 0, "#3a2a20");
+      out.box(0, 0, 0, barrel + 1, 0, 0, tint);
+      out.box(0, 1, 0, barrel + 1, 1, 0, shade(tint, -30));
+      return [barrel + 2, 0, 0];
+    },
+    rifle(out, tint, barrel) {
+      out.box(-7, -1, 0, -3, 0, 0, tint);                    // butt stock
+      out.box(-8, -2, 0, -7, 0, 0, tint);
+      out.box(-3, 0, 0, barrel, 0, 0, GUN_DARK);             // barrel
+      out.box(-3, -1, 0, 1, -1, 0, shade(tint, 20));         // fore-end
+      out.box(-3, -2, 0, -2, -2, 0, GUN_DARK);               // lever loop
+      out.set(-2, 1, 0, GUN_DARK);                           // hammer
+      out.set(barrel, 1, 0, shade(GUN_DARK, 55));            // bead
+      return [barrel + 1, 0, 0];
+    },
+    shotgun(out, tint, barrel) {
+      out.box(-7, -1, 0, -3, 0, 0, tint);
+      out.box(-8, -2, 0, -7, 0, 0, tint);
+      out.box(-3, 0, -1, barrel, 0, -1, GUN_DARK);           // side-by-side
+      out.box(-3, 0, 1, barrel, 0, 1, GUN_DARK);
+      out.box(-3, -1, -1, 0, -1, 1, shade(tint, 20));
+      out.set(-2, 1, 0, GUN_DARK);
+      return [barrel + 1, 0, 0];
+    },
+    gatling(out, tint, barrel) {
+      for (const z of [-1, 0, 1]) out.box(2, 0, z, barrel, 0, z, tint);
+      out.box(2, 1, 0, barrel - 1, 1, 0, shade(tint, 25));   // top barrel
+      out.box(0, -1, -1, 2, 1, 1, shade(tint, -25));         // breech
+      out.box(-2, 0, 0, 0, 0, 0, WOOD);                      // handle
+      out.box(-1, 1, 2, 0, 2, 2, BRASS);                     // crank
+      out.box(0, 2, -2, 1, 3, -2, shade(tint, 15));          // hopper
+      return [barrel + 1, 0, 0];
+    },
+    knife(out, tint, barrel) {
+      out.box(-3, 0, 0, -1, 0, 0, WOOD);                     // handle
+      out.box(-1, 1, 0, -1, -1, 0, BRASS);                   // guard
+      out.box(0, 0, 0, barrel, 0, 0, tint);
+      out.box(0, 1, 0, barrel - 2, 1, 0, shade(tint, 35));   // edge
+      return [barrel + 1, 0, 0];
+    },
+    bow(out, tint, barrel) {
+      for (let y = -barrel; y <= barrel; y += 1) {
+        out.set(Math.round(Math.cos((y / barrel) * 1.2) * 2) - 2, y, 0, tint);
+      }
+      for (let y = -barrel + 1; y <= barrel - 1; y += 1) out.set(-2, y, 0, "#e8d7af");
+      out.box(-1, 0, 0, barrel, 0, 0, WOOD);                 // nocked arrow
+      out.set(barrel + 1, 0, 0, "#b9bec4");
+      return [barrel + 2, 0, 0];
+    },
+  };
+
+  function buildHeldWeapon(cardKey) {
+    const spec = HELD_WEAPONS[cardKey];
+    if (!spec) return null;
+    const out = grid();
+    const muzzle = WEAPON_BUILDERS[spec.shape](out, spec.tint, spec.barrel);
+    const voxels = out.list();
+    return { key: cardKey, shape: spec.shape, tint: spec.tint, voxels, muzzle, bounds: bounds(voxels) };
+  }
+
+  /* ---------- equipment that stays on the character ----------
+
+     A blue card is not an event, it is a thing that is now true about that
+     character until somebody takes it away, and the battlefield should say so
+     without being asked: the Barrel is standing beside them, the Dynamite is
+     strapped to their back with the fuse lit, the Rattlesnake is coiled in the
+     dust at their feet. Each one names where it hangs, and the stage resolves
+     the mount against the figure it belongs to.
+
+     `mount`  ground | crown | head | torso | back | belt | side
+     `origin` feet — the model stands on its mount; hung — it dangles from it
+     `motion` how it behaves while it sits there (see the stage) */
+  const ATTACHMENTS = {
+    /* The four things that stand in the dust each get their own corner of the
+       character's patch. Two of them beside a figure that is only ten voxels
+       across will otherwise stand inside each other, and inside the boots. */
+    barrel: { shape: "barrel_stand", tint: "#7d5630", mount: "ground", offset: [13, 0, 2], scale: 1.05 },
+    hat: { shape: "spare_hat", tint: "#5d3f28", mount: "crown", offset: [0, 2, 0], scale: 0.9, motion: "wobble" },
+    scope: { shape: "spyglass", tint: "#4a5560", mount: "head", offset: [4, 0, 3], scale: 0.85, motion: "gleam" },
+    gun_belt: {
+      shape: "bandolier", tint: LEATHER, mount: "torso", offset: [0, 4, 0],
+      scale: 1, origin: "hung",
+    },
+    bank: { shape: "strongbox", tint: "#4f5560", mount: "ground", offset: [-13, 0, 2], scale: 1, motion: "glint" },
+    clock: {
+      shape: "pocketwatch", tint: BRASS, mount: "side", offset: [5, 5, 4],
+      scale: 0.8, origin: "hung", motion: "swing",
+    },
+    dynamite: { shape: "bundle", tint: "#a5352b", mount: "back", offset: [0, 0, -3], scale: 1, motion: "spark" },
+    rattlesnake: { shape: "coiled", tint: "#7fbe5e", mount: "ground", offset: [6, 0, 9], scale: 1, motion: "coil" },
+    stampede: { shape: "steer_skull", tint: "#e0d6bc", mount: "ground", offset: [-7, 0, 9], scale: 1, motion: "sway" },
+  };
+
+  const ATTACHMENT_BUILDERS = {
+    barrel_stand(out, tint) {
+      const hoop = "#4a4038";
+      out.box(-2, 0, -1, 2, 6, 1, tint);
+      out.box(-1, 0, -2, 1, 6, 2, tint);
+      out.box(-2, 1, -1, 2, 1, 1, hoop);
+      out.box(-1, 1, -2, 1, 1, 2, hoop);
+      out.box(-2, 5, -1, 2, 5, 1, hoop);
+      out.box(-1, 5, -2, 1, 5, 2, hoop);
+      out.box(-1, 7, -1, 1, 7, 1, shade(tint, 25));          // lid
+    },
+    spare_hat(out, tint) {
+      out.box(-4, 0, -3, 4, 0, 3, tint);
+      out.box(-2, 1, -2, 2, 2, 2, tint);
+      out.box(-2, 1, -2, 2, 1, 2, shade(tint, -35));         // band
+    },
+    spyglass(out, tint) {
+      out.box(0, 0, 0, 4, 0, 0, tint);
+      out.box(4, 0, 0, 6, 0, 0, shade(tint, 25));
+      out.set(7, 0, 0, "#8fc7e0");                            // lens
+      out.set(-1, 0, 0, "#1d1a19");                           // eyepiece
+      out.set(2, 1, 0, BRASS);
+    },
+    bandolier(out, tint) {
+      // a cartridge belt worn across the chest, brass showing all the way down
+      for (let step = 0; step <= 8; step += 1) {
+        const x = -4 + step;
+        const y = 4 - step;
+        out.set(x, y, 3, tint);
+        if (step % 2 === 0) out.set(x, y - 1, 3, BRASS);
+      }
+      out.box(-5, -1, 2, -5, 1, 3, tint);
+    },
+    strongbox(out, tint) {
+      out.box(-3, 0, -2, 3, 4, 2, tint);
+      out.box(-3, 5, -2, 3, 5, 2, shade(tint, -25));
+      out.box(-2, 1, 3, 2, 4, 3, shade(tint, 30));           // door
+      out.set(0, 2, 4, BRASS);                                // dial
+      out.box(-3, 2, -3, 3, 2, -3, BRASS);
+    },
+    // Hung from a fob at the top rather than stood on the ground, so the
+    // swing happens where the chain is rather than around the watch.
+    pocketwatch(out, tint) {
+      out.box(0, -1, 0, 0, -4, 0, shade(tint, -30));          // chain
+      out.box(-1, -5, 0, 1, -7, 0, tint);                     // case
+      out.set(0, -6, 1, "#e8d7af");                           // face
+    },
+    bundle(out, tint) {
+      for (const x of [-1, 0, 1]) out.box(x, 0, 0, x, 4, 0, x === 0 ? shade(tint, 20) : tint);
+      out.box(-1, 2, 0, 1, 2, 0, "#e8d7af");                  // wrap
+      out.box(0, 5, 0, 0, 7, 0, "#8a7a5a");                   // fuse
+    },
+    coiled(out, tint) {
+      const dark = shade(tint, -40);
+      for (let step = 0; step < 22; step += 1) {
+        const angle = step * 0.62;
+        const radius = 4 - step * 0.12;
+        out.set(Math.round(Math.cos(angle) * radius), Math.floor(step / 8),
+                Math.round(Math.sin(angle) * radius), step % 2 ? tint : dark);
+      }
+      out.box(0, 3, 0, 0, 5, 0, tint);                        // reared head
+      out.set(0, 5, 1, "#e2553b");                            // tongue
+      out.set(1, 5, 0, "#241a14");
+    },
+    steer_skull(out, tint) {
+      out.box(-1, 1, -1, 1, 4, 1, tint);
+      out.box(-2, 4, 0, 2, 4, 0, tint);
+      out.box(-4, 5, 0, -2, 6, 0, shade(tint, -20));          // horns
+      out.box(2, 5, 0, 4, 6, 0, shade(tint, -20));
+      out.set(-1, 3, 2, "#241a14");
+      out.set(1, 3, 2, "#241a14");
+    },
+  };
+
+  function buildAttachment(cardKey) {
+    const spec = ATTACHMENTS[cardKey];
+    if (!spec) return null;
+    const out = grid();
+    ATTACHMENT_BUILDERS[spec.shape](out, spec.tint);
+    const voxels = out.list();
+    return {
+      key: cardKey, shape: spec.shape, tint: spec.tint, mount: spec.mount,
+      offset: spec.offset, scale: spec.scale ?? 1, motion: spec.motion || null,
+      origin: spec.origin || "feet", voxels, bounds: bounds(voxels),
+    };
+  }
+
   return {
     CHARACTERS,
     CARD_PROPS,
+    HELD_WEAPONS,
+    ATTACHMENTS,
     DEFAULT_CHARACTER,
     HEIGHTS,
+    ARM_SIDE,
     buildFigure,
     buildProp,
+    buildHeldWeapon,
+    buildAttachment,
     traitsFor,
     bounds,
     shade,

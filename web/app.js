@@ -1140,9 +1140,13 @@
       this.api.resize();
     },
 
-    sync(state) {
+    /* `dressDelay` holds the equipment change back to roughly the beat the
+       card's own ceremony plays on. Without it the Barrel is standing beside
+       the character before the card has left the hand, and a Barrel spent to
+       stop a bullet is gone before the bullet arrives. */
+    sync(state, dressDelay = 0) {
       if (!this.available() || !state) return;
-      this.api.sync(Array.from(seatedCharacters(state).values()));
+      this.api.sync(Array.from(seatedCharacters(state).values()), dressDelay);
     },
 
     /* The cast changing, in the order it has to happen: the fallen are put
@@ -1154,7 +1158,7 @@
       for (const who of seats.fallen) {
         this.api.fall(who.id, who.key, who.zone, who.swept ? 200 : 380, who.swept);
       }
-      this.sync(next);
+      this.sync(next, prev ? FX_TIMING.enter : 0);
       for (const who of seats.arrivals) {
         this.api.arrive(who.id, who.replacement ? 940 : 300);
       }

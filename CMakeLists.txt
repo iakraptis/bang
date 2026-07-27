@@ -84,6 +84,11 @@ if(BANG_BUILD_TESTS)
       COMMAND "${BANG_NODE_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_voxel_models_tests.js"
     )
+    add_test(
+      NAME web_voxel_stage_tests
+      COMMAND "${BANG_NODE_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_voxel_stage_tests.js"
+    )
   endif()
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
