@@ -11,12 +11,14 @@
   const { effectiveDropZone } = window.BangTargeting;
   const { planPlays, playCaption, motifFor, characterEvents, seatedCharacters,
           TIMING: FX_TIMING } = window.BangCardFx;
+  const { buildHistory } = window.BangHistory;
 
   let game = null;
   let busy = false;
   let selectedCard = null;
   let toastTimer = null;
   let logOpen = false;
+  let historyOpen = false; // the played-cards trail over the discard pile
   let renderedGame = null; // the state the current DOM was built from
   let autoPass = null; // { id } of the decision being auto-applied
   let autoPassTimer = null;
@@ -524,7 +526,9 @@
         })).join("")}</div>` : ""}
         <div class="table-piles">
           ${game.commonDeckCreated ? deckStack(game.commonDeckCount, "", "Common deck") : ""}
-          <div class="discard-spot" ${tipAttr("Discard", `${game.discardCount} cards`)}>
+          <div class="discard-spot" data-open-history role="button" tabindex="0"
+            aria-label="Open the played-card history"
+            ${tipAttr("Played cards", `${game.discardCount} on the pile — tap to walk the trail of every play`)}>
             ${top ? cardMarkup(top, { compact: true }) : '<span class="discard-empty"></span>'}
           </div>
         </div>
@@ -623,6 +627,147 @@
       <header><strong>Trail</strong><button class="ghost-btn" data-toggle-log>${ICONS.close}</button></header>
       <div class="log-list">${logs}</div>
     </aside>`;
+  }
+
+  /* ---------- the trail: played-card history ----------
+     Clicking the discard pile opens the duel as a story: a horizontal
+     timeline, the opponent's plays riding the top rail and yours the
+     bottom, oldest on the left. Every card that was played in answer to a
+     moment — a Missed! against a BANG!, the draft picks a General Store
+     opened, the hit cards a Duel traded — sits greyed out behind the card
+     that caused it, peeking toward the rail of whoever committed it. */
+
+  function histTip(title, entry) {
+    return tipAttr(title, entry.text || "");
+  }
+
+  function histResponseMarkup(response, index) {
+    const mine = response.player === game.humanPlayer;
+    const dir = mine ? "down" : "up";
+    if (response.kind === "back") {
+      return `<span class="hist-resp back ${dir}" style="--k:${index}"
+        ${histTip(`A hidden ${escapeHtml(response.origin)} card`, response)}>
+        <span class="mini-back ${sideClass(response.origin)}"></span></span>`;
+    }
+    return `<img class="hist-resp ${dir}" style="--k:${index}" draggable="false" alt=""
+      src="${cardImage(response.key)}" ${histTip(response.name, response)}>`;
+  }
+
+  function histBadgesMarkup(responses) {
+    const badges = (responses || [])
+      .filter(response => response.kind === "hit" || response.kind === "death")
+      .map(response => response.kind === "hit"
+        ? `<span class="hist-hit ${sideClass(response.side)}"
+            ${histTip(response.concede ? "Conceded — lost 1 life" : "Took the hit", response)}>−1</span>`
+        : `<span class="hist-death" ${histTip(`${response.name} fell`, response)}>
+            <img src="${cardImage(response.key)}" alt="" draggable="false"><span>☠</span></span>`);
+    return badges.length ? `<div class="hist-badges">${badges.join("")}</div>` : "";
+  }
+
+  function histStackMarkup(moment, mainHtml) {
+    // Response cards fan out behind the main card, each toward the rail of
+    // the player who committed it — so a glance says who answered.
+    let up = 0;
+    let down = 0;
+    const layers = (moment.responses || [])
+      .filter(response => response.kind === "card" || response.kind === "back")
+      .map(response => histResponseMarkup(
+        response, response.player === game.humanPlayer ? down++ : up++));
+    const spread = Math.max(up, down);
+    return `<div class="hist-stack" style="--n:${spread}">${layers.join("")}${mainHtml}</div>`;
+  }
+
+  function histMomentMarkup(moment) {
+    const mine = moment.player === game.humanPlayer;
+    const lane = moment.player === null ? "neutral" : mine ? "mine" : "enemy";
+    const side = sideClass(moment.side);
+
+    if (moment.type === "system" || moment.type === "setup") {
+      const label = moment.type === "setup" ? "Setup" : "The dealer";
+      return `<div class="hist-divider system" ${histTip(label, moment)}>
+        <span class="rule"></span><span class="label">${escapeHtml(moment.text)}</span><span class="rule"></span>
+      </div>`;
+    }
+    if (moment.type === "turn_end") {
+      const minis = (moment.responses || [])
+        .filter(response => response.kind === "card")
+        .map(response => `<img class="hist-mini" src="${cardImage(response.key)}" alt="" draggable="false"
+          ${histTip(`${response.name} — over the hand limit`, response)}>`);
+      return `<div class="hist-divider turn ${side}" ${histTip("The turn ends", moment)}>
+        <span class="rule"></span><span class="label">turn ends</span>
+        ${minis.join("")}${histBadgesMarkup(moment.responses)}
+        <span class="rule"></span>
+      </div>`;
+    }
+    if (moment.type === "swap") {
+      return `<div class="hist-moment ${lane} ${side}">
+        <div class="hist-cell top">${mine ? "" : `<span class="hist-token" ${histTip("Swapped positions", moment)}>⇆</span>`}</div>
+        <div class="hist-cell bottom">${mine ? `<span class="hist-token" ${histTip("Swapped positions", moment)}>⇆</span>` : ""}</div>
+      </div>`;
+    }
+    if (moment.type === "prior") {
+      const content = `${histStackMarkup(moment,
+        `<span class="hist-main ellipsis" ${tipAttr("Earlier plays", "The trail only remembers so far back — these answered a play that has faded from it.")}>⋯</span>`)}
+        ${histBadgesMarkup(moment.responses)}`;
+      return `<div class="hist-moment neutral">
+        <div class="hist-cell top"></div>
+        <div class="hist-cell bottom">${content}</div>
+      </div>`;
+    }
+
+    // play / ability / reload — a proper moment with a card on stage
+    const mark = moment.type === "ability" ? '<span class="hist-mark ability" aria-hidden="true">✦</span>' :
+                 moment.type === "reload" ? '<span class="hist-mark" aria-hidden="true">↻</span>' :
+                 moment.asColt ? '<span class="hist-mark" aria-hidden="true">◎</span>' : "";
+    const title = moment.type === "ability" ? `${moment.actor || moment.name} — ability` :
+                  moment.type === "reload" ? `${moment.name} — recycled` :
+                  moment.asColt ? `${moment.name} — fired as a Colt` : moment.name;
+    const main = `<img class="hist-main ${moment.type === "ability" ? "ability" : ""}"
+      src="${cardImage(moment.key)}" alt="" draggable="false" ${histTip(title, moment)}>`;
+    const content = `${histStackMarkup(moment, `${main}${mark}`)}
+      ${histBadgesMarkup(moment.responses)}
+      <span class="hist-caption">${escapeHtml(moment.actor || moment.side)}</span>`;
+    return `<div class="hist-moment ${lane} ${side}">
+      <div class="hist-cell top">${mine ? "" : content}</div>
+      <div class="hist-cell bottom">${mine ? content : ""}</div>
+    </div>`;
+  }
+
+  function historyOverlay() {
+    if (!historyOpen) return "";
+    const moments = buildHistory(game.log);
+    const opponent = game.players[1 - game.humanPlayer];
+    const body = moments.length
+      ? `<div class="history-lanes">
+          <div class="lane-tags" aria-hidden="true">
+            <span class="${sideClass(opponent?.side)}">${escapeHtml(opponent?.side || "Them")}</span>
+            <span class="${sideClass(game.players[game.humanPlayer]?.side)}">You</span>
+          </div>
+          ${moments.map(histMomentMarkup).join("")}
+        </div>`
+      : `<p class="history-empty">Nothing has hit the felt yet — the story starts with the first card.</p>`;
+    return `<div class="history-overlay" data-close-history-backdrop>
+      <div class="history-panel" role="dialog" aria-modal="true" aria-label="Played cards">
+        <header class="history-bar">
+          <strong>The Trail</strong>
+          <span class="history-note">every play, oldest first — answers tucked behind the card they answered</span>
+          <button class="ghost-btn" data-close-history aria-label="Close the history">${ICONS.close}</button>
+        </header>
+        <div class="history-scroll">${body}</div>
+      </div>
+    </div>`;
+  }
+
+  // Reopening the trail lands on the newest moment; while it stays open the
+  // view keeps the player's place — unless they were already riding the end,
+  // where new plays keep arriving.
+  function tuneHistoryScroll(previous) {
+    const scroller = app.querySelector(".history-scroll");
+    if (!scroller) return;
+    const max = scroller.scrollWidth - scroller.clientWidth;
+    scroller.scrollLeft = previous === null || previous.atEnd
+      ? max
+      : Math.min(previous.at, max);
   }
 
   function winnerOverlay() {
@@ -880,6 +1025,12 @@
     // scrolled rail, and losing its position on every play would throw the
     // player back to the first card each time they did anything.
     const railAt = app.querySelector(".cards-fan")?.scrollLeft ?? 0;
+    // Same idea for the history trail, which also survives re-renders.
+    const histEl = app.querySelector(".history-scroll");
+    const histAt = histEl ? {
+      at: histEl.scrollLeft,
+      atEnd: histEl.scrollLeft >= histEl.scrollWidth - histEl.clientWidth - 40,
+    } : null;
     const human = game.players[game.humanPlayer];
     const opponent = game.players[1 - game.humanPlayer];
     app.classList.toggle("busy", busy);
@@ -909,6 +1060,7 @@
         ${playerRow(human)}
       </main>
       ${logDrawer()}
+      ${historyOverlay()}
       ${winnerOverlay()}`;
     renderedGame = game;
     voxelStage.attach();
@@ -922,6 +1074,7 @@
     }
     updateZoneMarks();
     tuneHandRail(railAt);
+    tuneHistoryScroll(histAt);
   }
 
   /* Keep the hand rail where the player left it, and bring a freshly selected
@@ -2176,7 +2329,7 @@
     const body = el.dataset.tip || "";
     if (!title && !body) return;
     closeCardSheet();
-    const art = el.querySelector("img")?.getAttribute("src");
+    const art = (el.matches("img") ? el : el.querySelector("img"))?.getAttribute("src");
     sheetEl = document.createElement("div");
     sheetEl.className = "card-sheet-backdrop";
     sheetEl.innerHTML = `<div class="card-sheet" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
@@ -2385,6 +2538,17 @@
     if (actionButton) { applyAction(Number(actionButton.dataset.action)); return; }
     if (dragRoot.querySelector(".chooser") && !event.target.closest(".chooser")) { closeChooser(); return; }
     if (event.target.closest("[data-toggle-log]")) { logOpen = !logOpen; render(); return; }
+    if (event.target.closest("[data-close-history]") ||
+        event.target.matches?.("[data-close-history-backdrop]")) {
+      historyOpen = false; render(); return;
+    }
+    if (event.target.closest("[data-open-history]")) {
+      // While a selected card is aimed at the table, the felt — discard pile
+      // included — is a drop target first; the history can wait a beat.
+      const tableDrop = !busy && selectedCard !== null &&
+        actionsForInstance(selectedCard).some(action => zoneForAction(action) === "table");
+      if (!tableDrop) { historyOpen = true; render(); return; }
+    }
     if (event.target.closest("[data-toggle-sound]")) { sfx.toggle(); render(); return; }
     if (event.target.closest("[data-share-card]")) { sharePoster(); return; }
     if (event.target.closest("[data-quick-play]")) { createGame(lastSetup()); return; }
@@ -2421,12 +2585,33 @@
   });
 
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") { closeChooser(); if (selectedCard !== null) { selectedCard = null; render(); } return; }
+    if (event.key === "Escape") {
+      if (historyOpen) { historyOpen = false; render(); return; }
+      closeChooser();
+      if (selectedCard !== null) { selectedCard = null; render(); }
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches?.("[data-open-history]")) {
+      event.preventDefault();
+      historyOpen = true;
+      render();
+      return;
+    }
     if ((event.key === "Enter" || event.key === " ") && event.target.matches?.("[data-instance].actionable")) {
       event.preventDefault();
       toggleCardSelection(Number(event.target.dataset.instance), 0, 0);
     }
   });
+
+  /* The trail reads left to right, so a mouse wheel — which only knows up and
+     down — drives it sideways. Trackpads already speak horizontal and keep
+     their own gesture. */
+  document.addEventListener("wheel", event => {
+    const scroller = event.target.closest?.(".history-scroll");
+    if (!scroller || event.deltaX !== 0 || !event.deltaY) return;
+    scroller.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
 
   document.addEventListener("mouseover", event => {
     if (document.body.classList.contains("dragging")) return;
@@ -2489,7 +2674,7 @@
   }
 
   async function createGame(values = lastSetup()) {
-    busy = true; selectedCard = null; modalRoot.innerHTML = "";
+    busy = true; selectedCard = null; historyOpen = false; modalRoot.innerHTML = "";
     matchStats = null;
     if (game) render();
     else app.innerHTML = `<div class="boot-card"><span class="boot-kicker">Dealing</span><strong>BANG! THE DUEL</strong><span class="boot-line"></span></div>`;

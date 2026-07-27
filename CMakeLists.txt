@@ -65,6 +65,11 @@ if(BANG_BUILD_TESTS)
               "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_card_fx_tests.js"
     )
     add_test(
+      NAME web_history_tests
+      COMMAND "${BANG_NODE_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_history_tests.js"
+    )
+    add_test(
       NAME web_card_back_assets_tests
       COMMAND "${BANG_NODE_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/tests/web_card_back_assets_tests.js"

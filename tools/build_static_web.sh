@@ -41,7 +41,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
-cp web/index.html web/app.js web/static-engine.js web/targeting.js web/card-fx.js web/styles.css \
+cp web/index.html web/app.js web/static-engine.js web/targeting.js web/card-fx.js web/history.js web/styles.css \
   web/voxel-models.js web/voxel-stage.js \
   web/about.html web/about.css web/about.js web/about-data.js web/favicon.svg \
   "$OUTPUT_DIR/"
