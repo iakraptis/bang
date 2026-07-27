@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Deterministic simulation smoke
+        run: ./build/bang_duel simulate 1000 42 4
+
+  static-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Emscripten
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes emscripten
+      - name: Build static webapp
+        run: tools/build_static_web.sh web/dist-static policy/static-policy.json
+      - name: Check deployable artifact
+        run: |
+          test -s web/dist-static/index.html
+          test -s web/dist-static/bang_static_web.js
+          test -s web/dist-static/bang_static_web.wasm
+          test -s web/dist-static/bang_static_web.data
+          ! grep -R -E '(src|href)="/' web/dist-static/index.html
+
+  training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Configure
+        run: |
+          TORCH_PREFIX="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+          cmake -S . -B build-train \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBANG_ENABLE_TORCH=ON \
+            -DCMAKE_PREFIX_PATH="$TORCH_PREFIX"
+      - name: Build
+        run: cmake --build build-train --parallel 2
+      - name: Native and training lifecycle tests
+        run: ctest --test-dir build-train --output-on-failure
+
+  deploy:
+    name: Deploy to Cloudflare Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [engine, static-web, training]
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+      CLOUDFLARE_PAGES_DOMAIN: ${{ vars.CLOUDFLARE_PAGES_DOMAIN }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Validate deployment configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN repository secret}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID repository secret}"
+          : "${CLOUDFLARE_PAGES_PROJECT:?Missing CLOUDFLARE_PAGES_PROJECT repository variable}"
+          : "${CLOUDFLARE_PAGES_DOMAIN:?Missing CLOUDFLARE_PAGES_DOMAIN repository variable}"
+      - name: Install Emscripten
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes emscripten
+      - name: Build trained static webapp
+        run: tools/build_static_web.sh web/dist-static policy/static-policy.json
+      - name: Deploy production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          COMMIT_MESSAGE="$(git log -1 --pretty=%s)"
+          npx --yes wrangler@4.114.0 pages deploy web/dist-static \
+            --project-name "$CLOUDFLARE_PAGES_PROJECT" \
+            --branch main \
+            --commit-hash "$GITHUB_SHA" \
+            --commit-message "$COMMIT_MESSAGE" \
+            --commit-dirty=false
+      - name: Check custom domain
+        run: |
+          curl --fail --silent --show-error --head \
+            --retry 6 --retry-all-errors --retry-delay 5 \
+            "https://$CLOUDFLARE_PAGES_DOMAIN/"

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17100e">
+  <meta name="description" content="How a neural network taught itself to play BANG! The Duel — the game, the algorithm, the network, the training run, and the meta it found.">
+  <title>The Gunslinger That Taught Itself · BANG! The Duel</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="about.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <a class="site-nav" href="index.html">← Back to the table</a>
+
+    <p class="eyebrow">How the opponent was built</p>
+    <h1>The gunslinger<br>that taught itself</h1>
+    <p class="lede">
+      The bot you just played is a neural network. It began knowing nothing — not
+      the rules of a duel, not that shooting is usually good — and learned by
+      playing itself <span data-training-games>—</span> times.
+    </p>
+    <p class="lede lede-quiet">
+      Nobody showed it a human game. Nobody wrote it an opening book. This page
+      goes through it in order: the game it had to learn, the algorithm that
+      taught it, the network doing the deciding, what the training run produced,
+      and what it now believes about BANG! The Duel.
+    </p>
+
+    <dl class="stat-strip">
+      <div><dt data-count="steps">—</dt><dd>game steps played</dd></div>
+      <div><dt data-count="parameters">—</dt><dd>weights in the brain</dd></div>
+      <div><dt data-count="hours">—</dt><dd>hours of self-play</dd></div>
+      <div><dt>0</dt><dd>human games seen</dd></div>
+    </dl>
+
+    <nav class="syllabus" aria-label="Contents">
+      <ol>
+        <li><a href="#part-1"><span>01</span>The game</a></li>
+        <li><a href="#part-2"><span>02</span>The algorithm</a></li>
+        <li><a href="#part-3"><span>03</span>The network</a></li>
+        <li><a href="#part-4"><span>04</span>The run</a></li>
+        <li><a href="#part-5"><span>05</span>The meta</a></li>
+      </ol>
+    </nav>
+
+    <p class="scroll-hint">Scroll · figures follow along</p>
+  </header>
+
+  <nav class="rail" aria-label="Progress">
+    <ol>
+      <li><a href="#part-1" data-rail="1"><span>01</span><em>The game</em></a></li>
+      <li><a href="#part-2" data-rail="2"><span>02</span><em>The algorithm</em></a></li>
+      <li><a href="#part-3" data-rail="3"><span>03</span><em>The network</em></a></li>
+      <li><a href="#part-4" data-rail="4"><span>04</span><em>The run</em></a></li>
+      <li><a href="#part-5" data-rail="5"><span>05</span><em>The meta</em></a></li>
+    </ol>
+  </nav>
+
+  <main class="lecture">
+    <div class="column-figure" aria-hidden="true">
+      <div class="figure-sticky">
+        <div id="visual-stage" class="visual-stage"></div>
+        <figcaption class="figure-caption">
+          <span class="figure-label" data-figure-label>Figure</span>
+          <span class="figure-text" data-figure-text></span>
+        </figcaption>
+      </div>
+    </div>
+
+    <div class="column-text">
+
+      <!-- ============ ACT 1 · THE GAME ============ -->
+      <header class="step part-head" id="part-1" data-part="1" data-scene="chapter"
+              data-part-title="The game"
+              data-figure-caption="BANG! The Duel: two rosters of four, two 40-card decks, and about 35 turns to kill everything opposite you.">
+        <p class="part-number">Act 01</p>
+        <h2>The game</h2>
+        <p>Before any of the machine learning, the thing it has to learn: a two-player Wild West card duel with hidden hands, dice-free luck, and 24 characters that all break the rules differently.</p>
+      </header>
+
+      <article class="step" data-scene="duel"
+               data-figure-caption="Two rosters of four. One character active, one covering the rear, two waiting in reserve.">
+        <p class="eyebrow">The board</p>
+        <h3>Law versus Outlaw, four characters each.</h3>
+        <p>BANG! The Duel is the two-player version of BANG!. One player takes the Law, the other the Outlaws. Each side brings four characters, but only two stand on the table: an <em>active</em> character in front and a <em>rearguard</em> behind it. The other two wait in reserve.</p>
+        <p>Every character has its own printed life total. Lose them all and that character is eliminated, a reserve steps into the same slot, and the side that eliminated it draws two cards as a reward.</p>
+        <p class="beat">There is exactly one way to win: eliminate all four characters on the other side of the table.</p>
+      </article>
+
+      <article class="step" data-scene="roster"
+               data-figure-caption="24 characters, twelve a side. Four are drafted; two of those four are seen by the opponent at setup.">
+        <p class="eyebrow">The draft</p>
+        <h3>24 characters. You get four of them.</h3>
+        <p>Twelve Law characters, twelve Outlaws, and every one of them has an always-on or once-per-turn ability that bends a rule: an extra BANG! each turn, a free counter-shot, damage that splits, a card that can be played as something it isn't.</p>
+        <p>Setup is a simultaneous, blind choice — both players pick four, both commit, then two of each four are revealed and enter play. Law draws four cards, Outlaw draws five, and Law takes the first turn.</p>
+        <p class="beat">Which four you hold is the first real decision of the game, and it is made before you know anything at all.</p>
+      </article>
+
+      <article class="step" data-scene="turn"
+               data-figure-caption="One turn: hazards resolve, you draw two, you play, then you discard down to your active character's life.">
+        <p class="eyebrow">The turn</p>
+        <h3>Draw two, play, discard down.</h3>
+        <p>A turn starts with whatever is already stuck to you — Dynamite, Rattlesnake, Stampede all resolve before anything else — then you draw two cards from your own 40-card deck.</p>
+        <p>Then you play as much as you like, with one hard brake: <span class="mono">one</span> BANG! card per turn unless a Gun Belt or the right character says otherwise. You may swap your active and rear characters once. At the end, you discard down to a hand limit equal to your active character's remaining life.</p>
+        <p class="beat">Hurt characters hold fewer cards. Falling behind on life means falling behind on options.</p>
+      </article>
+
+      <article class="step" data-scene="combat"
+               data-figure-caption="A shot is not resolved when it is played — it opens a chain of answers, each of which is its own decision.">
+        <p class="eyebrow">The fight</p>
+        <h3>Every shot is a negotiation.</h3>
+        <p>A BANG! card does not simply deal damage. The target can answer with Missed!, with a Hat, or by revealing the top card of the deck and hoping for a Barrel symbol. Return Fire sends the hit straight back. Some characters get an extra answer for free.</p>
+        <p>Reach matters too. By default you can only shoot the character standing in front of you; hitting the rearguard needs a Winchester, a Scope, or the one character who ignores the rule.</p>
+        <p class="beat">Which is why the interesting question is rarely "can I shoot" — it is "what can they still do about it".</p>
+      </article>
+
+      <article class="step" data-scene="hidden"
+               data-figure-caption="The information boundary: own hand and public table on one side, opponent hand, reserves and deck order in the dark.">
+        <p class="eyebrow">The hard part</p>
+        <h3>Half the board is a secret.</h3>
+        <p>The agent sees its own hand, both boards, the shared discard pile, and everything play has already revealed — including cards it watched change hands. It never sees the opponent's hand, their reserve identities, or the order of any deck.</p>
+        <p>The move list is never the same twice either. The engine defines <span class="mono">997</span> stable action IDs covering every card instance, target, ability and response; on a typical decision only a handful are legal.</p>
+        <p class="beat">Two different secrets can produce the exact same view. Against a hidden hand, the best you can do is play the average.</p>
+      </article>
+
+      <article class="step" data-scene="objective"
+               data-figure-caption="Nothing, nothing, nothing — and then win or lose. About 35 turns of silence per game.">
+        <p class="eyebrow">The only signal</p>
+        <h3>One bit of feedback, once.</h3>
+        <p>No points for damage. No bonus for a clever save. The duel pays <span class="mono">+1</span> for a win, <span class="mono">−1</span> for a loss, and stays silent for everything in between — deliberately, because hand-written rewards teach the agent to chase the reward instead of the win.</p>
+        <p>A finished game runs about <span data-mean-turns>—</span> turns and roughly 270 engine steps.</p>
+        <p class="beat">Hundreds of decisions, one bit of truth at the end. Working out which move deserves the credit is the entire problem.</p>
+      </article>
+
+      <!-- ============ ACT 2 · THE ALGORITHM ============ -->
+      <header class="step part-head" id="part-2" data-part="2" data-scene="chapter"
+              data-part-title="The algorithm"
+              data-figure-caption="PPO: play a batch, work out which moves beat expectations, nudge those up, never lurch.">
+        <p class="part-number">Act 02</p>
+        <h2>The algorithm</h2>
+        <p>Why the answer here is reinforcement learning and not a search tree — and how Proximal Policy Optimization turns win-or-lose into a better player.</p>
+      </header>
+
+      <article class="step" data-scene="search"
+               data-figure-caption="Chess-style search wants a tree it can evaluate. This game hands it a fog and a coin.">
+        <p class="eyebrow">The wrong tool</p>
+        <h3>You cannot search your way out of this.</h3>
+        <p>The classic way to beat a board game is to search: expand the tree of futures, score the leaves, back the values up. That works when you can see the position and the rules are deterministic.</p>
+        <p>Here neither holds. You do not know their hand, so you cannot expand their real options. Every draw and every Barrel reveal branches on chance. Games run 35 turns deep, and a "position" includes two hidden hands and two shuffled decks — the tree does not just get big, it gets <em>unknowable</em>.</p>
+        <p class="beat">So don't evaluate the tree. Learn a reflex: a function that looks at what you can see and says what to do.</p>
+      </article>
+
+      <article class="step" data-scene="policy"
+               data-figure-caption="A policy: everything visible goes in, a probability for each legal move comes out. Sample, play, record.">
+        <p class="eyebrow">The object being trained</p>
+        <h3>The player is a probability distribution.</h3>
+        <p>The thing being optimised is a <em>policy</em>: a function from the visible state to a probability for every currently legal move. To play, it samples from that distribution rather than always taking the top move — partly to keep exploring, partly because in a hidden-information game being predictable is itself a losing strategy.</p>
+        <p>Every decision it makes is recorded with the probability it assigned at the time. That number is what makes the later maths work.</p>
+        <p class="beat">Training does not edit rules or heuristics. It edits the odds.</p>
+      </article>
+
+      <article class="step" data-scene="gradient"
+               data-figure-caption="Beat the critic's prediction and the move gets played more. Fall short and it fades.">
+        <p class="eyebrow">The learning rule</p>
+        <h3>Do more of what beat expectations.</h3>
+        <p>The naive version — "we won, so every move we made was good" — is far too noisy: a won game is full of mediocre moves. So a second network, the <em>critic</em>, learns to predict the eventual result from any position. The learning signal is the difference between what actually happened and what the critic expected.</p>
+        <p>That difference is the <em>advantage</em>, smoothed backwards along the game so credit reaches the moves that set a win up, not just the one that finished it. Positive advantage pushes a move's probability up; negative pulls it down.</p>
+        <p class="beat">Not "did we win" but "did that go better than predicted". That is what makes one bit of feedback usable.</p>
+      </article>
+
+      <article class="step" data-scene="clip"
+               data-figure-caption="Past a ±20% change in a move's probability, pushing harder buys the update nothing at all.">
+        <p class="eyebrow">The brake</p>
+        <h3>Improve, but never leap.</h3>
+        <p>The batch is <span data-batch-games>—</span> games — a small sample of a game with this much variance. Trusting it fully would lurch the policy somewhere stupid, and because the next batch is generated <em>by that same policy</em>, a bad lurch poisons everything after it.</p>
+        <p>This is the "proximal" in PPO. Each update measures how much a move's probability has moved since the batch was collected, and once that ratio leaves a ±20% band the objective goes flat: pushing harder earns nothing. A separate check stops the update early if the policy has drifted more than <span data-target-kl>—</span> overall.</p>
+        <p class="beat">Small, provable steps beat big, hopeful ones — every time.</p>
+      </article>
+
+      <article class="step" data-scene="update"
+               data-figure-caption="Play a batch, grade it, take a few small steps, throw the data away, repeat.">
+        <p class="eyebrow">The loop</p>
+        <h3>Play <span data-batch-games>—</span> games. Learn. Forget. Repeat.</h3>
+        <p>One iteration plays a fresh batch of games across many boards at once, keeps only the decisions the learner actually made — forced responses are environment steps, not lessons — and grades every one of them.</p>
+        <p>It then makes <span data-update-epochs>—</span> passes over that batch in <span data-minibatches>—</span> minibatches, with a small entropy bonus that penalises collapsing to a single move too early, and throws the data away. Data from an older policy would be answering a question nobody is asking any more.</p>
+        <p class="beat">Then it does that <span data-training-iterations>—</span> times.</p>
+      </article>
+
+      <article class="step" data-scene="nontransitivity"
+               data-figure-caption="Strategy strength is a cycle, not a ladder: A beats B beats C beats A.">
+        <p class="eyebrow">The trap</p>
+        <h3>Beating yesterday's you proves nothing.</h3>
+        <p>Self-play has one famous failure. Train only against your newest copy and the target moves with you: you learn the counter to whatever it does now, it learns the counter to that, and the pair can circle forever.</p>
+        <p>Card games are especially prone to this because strength is not a ladder. Aggression beats greed, greed beats control, control beats aggression. There is no single "best" to converge on.</p>
+        <p class="beat">You can win every single game you play and go absolutely nowhere.</p>
+      </article>
+
+      <article class="step" data-scene="league"
+               data-figure-caption="Opponent chosen per game: half a frozen copy, 40% sampled history, 10% fixed anchors.">
+        <p class="eyebrow">The fix</p>
+        <h3>So it fights a whole population.</h3>
+        <p>Every game picks an opponent from a league. Half face a frozen snapshot of the current policy — frozen so the opponent cannot shift inside an update. Forty percent face older checkpoints pulled from an archive of past selves.</p>
+        <p>The last tenth is the safety rail: a scripted tactical bot and a random legal player. They never improve, which is the point — they are the fixed measuring stick that catches basic competence quietly rotting away.</p>
+      </article>
+
+      <article class="step" data-scene="pfsp"
+               data-figure-caption="Close matchups get played most — and nobody in the archive drops out entirely.">
+        <p class="eyebrow">The taste</p>
+        <h3>The best sparring partner is the one you barely beat.</h3>
+        <p>Opponents you crush teach nothing: the advantage is positive everywhere and no move stands out. Opponents that crush you teach noise. So the archive is sampled by how close each matchup is to even — prioritized fictitious self-play.</p>
+        <p>Every archived policy keeps a floor probability, so an old trick that nothing currently punishes stays in rotation instead of being forgotten and re-learned.</p>
+      </article>
+
+      <!-- ============ ACT 3 · THE NETWORK ============ -->
+      <header class="step part-head" id="part-3" data-part="3" data-scene="chapter"
+              data-part-title="The network"
+              data-figure-caption="Two encoders, a fused trunk, two heads — and a card game flattened into float arrays.">
+        <p class="part-number">Act 03</p>
+        <h2>The network</h2>
+        <p>How a table of cardboard becomes numbers, and what the <span data-parameter-count>—</span> weights on the other side of those numbers actually do.</p>
+      </header>
+
+      <article class="step" data-scene="observation"
+               data-figure-caption="Everything the agent is allowed to see, packed into one long row of numbers.">
+        <p class="eyebrow">The state</p>
+        <h3>The table is <span data-observation-size>—</span> numbers.</h3>
+        <p>Phase, both characters in play and their life, equipment, ability usage, the discard pile and its top card, the current pending hit and any queued response — all flattened into one fixed-length vector.</p>
+        <p>The card-identity parts are strictly observer-scoped: its own hand, its known reserve group, the public discard, and cards it legitimately watched move. Opponent hands and deck order are simply absent, not zeroed-out placeholders it could learn to peek at.</p>
+        <p class="beat">And it is always written from the acting seat: me versus them, never Law versus Outlaw. One network plays both sides.</p>
+      </article>
+
+      <article class="step" data-scene="action"
+               data-figure-caption="What the move does, which card it uses, whose it is, and who it points at.">
+        <p class="eyebrow">The moves</p>
+        <h3>Describe the move, don't number it.</h3>
+        <p>The lazy design gives the network one output slot per action — all 997 — and learns each from scratch. Most would be illegal at any given moment, and every one of the four Missed! copies in your hand would be a separate lesson.</p>
+        <p>Instead each legal move is written as <span data-action-size>—</span> semantic features: what kind of move it is, which card name and type, whose card, which relative target, which character, which option in a pending choice.</p>
+        <p class="beat">Two copies of the same card produce identical numbers — learn one, get the rest for free.</p>
+      </article>
+
+      <article class="step" data-scene="scoring"
+               data-figure-caption="Every legal move gets one score; a softmax over just those moves turns the scores into odds.">
+        <p class="eyebrow">The choice</p>
+        <h3>Score them all, then pick.</h3>
+        <p>The network reads the situation once and each candidate move, then returns a single number per move: how much it likes that move, here, now.</p>
+        <p>A softmax over <em>only the legal moves</em> turns those scores into probabilities. Nothing has to be masked out afterwards and no decision is padded to some worst-case width, so an illegal play is not unlikely — it is unrepresentable.</p>
+      </article>
+
+      <article class="step" data-scene="network"
+               data-figure-caption="Board and cards go in one end; a score for one candidate move comes out the other.">
+        <p class="eyebrow">The shape</p>
+        <h3><span data-parameter-count>—</span> weights. That is the whole player.</h3>
+        <p>Two encoders read the observation: one for the public board state, one for card identities, which are far sparser and deserve their own compression. They fuse into a 128-wide trunk with two residual blocks — the part that actually does the thinking.</p>
+        <p>From there a situation vector meets each move's features in a small scoring head. It is a plain feed-forward network: no recurrence, no memory of the game so far beyond what the observation encodes.</p>
+        <p class="beat">No search, no opening book, no rollouts. One forward pass per move, which is why it can live in a browser tab.</p>
+      </article>
+
+      <article class="step" data-scene="interaction"
+               data-figure-caption="The situation, the move, and — crucially — the two multiplied and subtracted.">
+        <p class="eyebrow">The trick</p>
+        <h3>Where the move meets the moment.</h3>
+        <p>Concatenating "the board" with "the card" and hoping a couple of layers work it out is weak: the network has to discover multiplication from scratch, and a card is only ever good <em>in a situation</em>.</p>
+        <p>So the scoring head is handed the elementwise product and difference of the two vectors as well. The product is a match detector — high only when the situation asks for what the card offers. The difference measures how far off the fit is.</p>
+        <p class="beat">Not "good card" plus "good board". Good card, <em>this</em> board.</p>
+      </article>
+
+      <article class="step" data-scene="critic"
+               data-figure-caption="The auxiliary coach peeks at both hands during training, then gets cut out of the exported model.">
+        <p class="eyebrow">The coach</p>
+        <h3>One critic is allowed to cheat.</h3>
+        <p>The deployable critic sees exactly what the player sees, so it can be honest about a fogged position. But learning to predict a winner from a fogged position is hard, and a bad critic means a noisy advantage means slow learning.</p>
+        <p>So training adds a second, auxiliary critic that sees <span data-privileged-size>—</span> extra numbers: both hands, both decks, the full card-zone truth. It shapes the shared trunk into better features, while its gradients never hand the actor a single privileged input.</p>
+        <p class="beat">Then both critics are cut off before export. The coach knew everything; the gunslinger walks out blind.</p>
+      </article>
+
+      <!-- ============ ACT 4 · THE RUN ============ -->
+      <header class="step part-head" id="part-4" data-part="4" data-scene="chapter"
+              data-part-title="The run"
+              data-figure-caption="Measured from the exact checkpoint that just played you.">
+        <p class="part-number">Act 04</p>
+        <h2>The run</h2>
+        <p>What forty hours on one CPU actually bought — and how to read a training curve that refuses to go up.</p>
+      </header>
+
+      <article class="step" data-scene="scale"
+               data-figure-caption="The shipped checkpoint, by the numbers. No GPU involved at any point.">
+        <p class="eyebrow">The receipts</p>
+        <h3>Forty hours of shooting itself.</h3>
+        <p><span data-training-games>—</span> complete duels. <span data-training-steps>—</span> game steps. <span data-training-decisions>—</span> decisions it had to answer for, across <span data-training-iterations>—</span> update cycles.</p>
+        <p>All of it on one desktop CPU, no GPU. The rules engine is C++ and fast enough that generating the games took <span data-rollout-hours>—</span> hours; the gradient steps took <span data-learn-hours>—</span>.</p>
+        <p class="beat">Thinking about the games cost nearly three times more than playing them.</p>
+      </article>
+
+      <article class="step" data-scene="training"
+               data-figure-caption="Win rate against the league. Flat, because the league improves at exactly the same pace.">
+        <p class="eyebrow">The curve</p>
+        <h3>The win rate flatlines — and that's fine.</h3>
+        <p>The easy wins come first, against a random player and a scripted bot that never change. Then the line settles near 55% and stops moving for the rest of the run.</p>
+        <p>That is not a plateau in skill. It is the scoreboard of a fair fight: the opponents are copies of itself, so improving twice as fast changes the graph not at all.</p>
+        <p class="beat">In self-play, a flat win rate is the expected shape of progress. You have to measure against something that stands still.</p>
+      </article>
+
+      <article class="step" data-scene="benchmark"
+               data-figure-caption="The same policy, measured against opponents that improve and opponents that cannot.">
+        <p class="eyebrow">The fixed yardstick</p>
+        <h3>Which is why the anchors matter.</h3>
+        <p>Pooled over the last <span data-style-window>—</span> iterations, the learner beats the scripted tactical bot <span data-heuristic-rate>—</span> of the time and a random legal player <span data-random-rate>—</span> of the time. Those two numbers are the ones that moved.</p>
+        <p>Against a frozen copy of itself it wins <span data-frozen-rate>—</span>, and against the archive of its own past selves <span data-history-rate>—</span> — both hovering at even, which is exactly what a converged league looks like.</p>
+        <p class="beat">Near-perfect against anything that stands still, a coin flip against itself.</p>
+      </article>
+
+      <article class="step" data-scene="confidence"
+               data-figure-caption="Its favourite move keeps taking a larger share of the vote as the run goes on.">
+        <p class="eyebrow">The tell</p>
+        <h3>It stopped hedging.</h3>
+        <p>Early on it spreads its bets: at the first measured checkpoint its favourite move takes <span data-first-confidence>—</span> of the probability, with entropy over the legal moves at <span data-first-entropy>—</span> of maximum. By the final checkpoint the favourite takes <span data-final-confidence>—</span> and entropy has fallen to <span data-final-entropy>—</span>.</p>
+        <p>It never goes fully deterministic — the entropy bonus keeps a little doubt in the system, and in a hidden-information game some randomness is correct play, not indecision.</p>
+        <p class="beat">Confidence is not proof it is right. It is proof it has stopped guessing.</p>
+      </article>
+
+      <article class="step" data-scene="deploy"
+               data-figure-caption="Weights become a JSON file, the same C++ rules become WebAssembly, and it lands in your tab.">
+        <p class="eyebrow">The shipping</p>
+        <h3>And it fits in a browser tab.</h3>
+        <p>At the end of the campaign the best snapshots play a paired round robin — every seed from both seats — and the highest mean field win rate is promoted to champion. The critics are stripped, and the player's weights become a small JSON file.</p>
+        <p>The rules engine that trained it compiles to WebAssembly, so the browser runs exactly the same rules, not a JavaScript reimplementation that might disagree.</p>
+        <p class="beat">No server, no telemetry. When it shoots you, that decision happened on your own machine.</p>
+      </article>
+
+      <!-- ============ ACT 5 · THE META ============ -->
+      <header class="step part-head" id="part-5" data-part="5" data-scene="chapter"
+              data-part-title="The meta"
+              data-figure-caption="Every number here comes from the champion playing itself for 2,048 fixed deals.">
+        <p class="part-number">Act 05</p>
+        <h2>The meta</h2>
+        <p>Put the final weights on both sides of the table, deal the same games repeatedly, and the policy's opinions about BANG! The Duel fall out.</p>
+      </header>
+
+      <article class="step" data-scene="sides"
+               data-figure-caption="Final mirror evaluation: identical weights on both sides, 2,048 games, plus every earlier checkpoint.">
+        <p class="eyebrow">Finding one</p>
+        <h3>Outlaw is simply the better seat.</h3>
+        <p>Identical weights, both chairs, <span data-eval-games>—</span> games on fixed deals. Outlaw takes <span data-outlaw-rate>—</span> of them and Law <span data-law-rate>—</span>.</p>
+        <p>The extra starting card and nothing else changes hands, and it never flips: across <span data-eval-checkpoints>—</span> separate checkpoint evaluations spanning the whole run, Law is under 50% in every single one.</p>
+        <p class="beat">Same player, same skill, different chair. That gap belongs to the game, not the gunslinger.</p>
+      </article>
+
+      <article class="step" data-scene="characters"
+               data-figure-caption="Win rate minus that side's baseline — how much better or worse than an average pick on the same side.">
+        <p class="eyebrow">Finding two</p>
+        <h3>A tier list nobody wrote down.</h3>
+        <p>Measured against its own side's baseline, <span data-top-characters>—</span> tower over their fields, while <span data-bottom-characters>—</span> drag theirs down. The spread inside one side is wider than the gap between the sides.</p>
+        <p>And it tracks one thing almost exactly: elimination rate. The characters at the top are the ones that are still standing at the end.</p>
+        <p class="beat">In this meta, power means not dying.</p>
+      </article>
+
+      <article class="step" data-scene="pairs"
+               data-figure-caption="Each duo's uplift against the sum of its two characters measured alone.">
+        <p class="eyebrow">Finding three</p>
+        <h3>It is a power meta, not a combo meta.</h3>
+        <p>Because characters are drafted in fours, the obvious question is which of them combine. So compare every same-side pair's uplift with the sum of its two members measured separately.</p>
+        <p>The answer is boring in an interesting way: pairs land within a couple of points of additive. Good duos beat their parts slightly, bad duos undershoot slightly, and nothing behaves like a real combo.</p>
+        <p class="beat">Draft the strongest characters. There is no clever engine waiting to be built.</p>
+      </article>
+
+      <article class="step" data-scene="matchups"
+               data-figure-caption="The extremes of the 144-cell Law × Outlaw grid, with the even line for reference.">
+        <p class="eyebrow">Finding four</p>
+        <h3>The matchups are brutal.</h3>
+        <p>Across the full Law-versus-Outlaw grid, Law's win rate ranges over <span data-matchup-spread>—</span> percentage points depending on nothing but who was dealt against whom.</p>
+        <p>The pattern is not subtle. The best cells for Law are the ones facing the weakest Outlaws; the worst are almost all the same handful of Outlaw carries. The single question that decides a Law roster's life is whether it dodged them.</p>
+        <p class="beat">Character selection here is not flavour. It is most of the game.</p>
+      </article>
+
+      <article class="step" data-scene="style"
+               data-figure-caption="How often it takes each option when that option is actually available to it.">
+        <p class="eyebrow">Finding five</p>
+        <h3>It plays scared. It wins anyway.</h3>
+        <p>Counting choices against opportunities rather than raw totals: it defends <span data-defense-rate>—</span> of the times it can, but attacks only <span data-attack-rate>—</span>. It fires character abilities <span data-ability-rate>—</span> of the time and plays <span data-cards-per-turn>—</span> cards a turn, a fifth of them equipment.</p>
+        <p>And it almost never reaches for the back row — <span data-rear-rate>—</span> of its targeting. Long-range shots need a specific weapon and give up tempo; it would rather kill what is in front of it.</p>
+        <p class="beat">Stay alive, keep the board, win later. Nobody taught it that.</p>
+      </article>
+
+      <article class="step" data-scene="cardmeta"
+               data-figure-caption="How often each card gets played when it is on offer — top four and bottom four of 31 names.">
+        <p class="eyebrow">Finding six</p>
+        <h3>Steal, block, breathe.</h3>
+        <p>Top of its shopping list: <span data-top-cards>—</span>. Bottom: <span data-bottom-cards>—</span>.</p>
+        <p>The shape is a control deck. Strip the opponent's resources first, draw ahead second, refuse to die third — and systematically avoid anything high-variance or self-damaging. Dynamite is offered tens of thousands of times and taken least of all.</p>
+        <p class="beat">It taught itself that resources beat fireworks, and that a card which can hurt you is barely a card.</p>
+      </article>
+
+      <article class="step" data-scene="caveat"
+               data-figure-caption="Three good reasons to hold every number on this page loosely.">
+        <p class="eyebrow">The honest part</p>
+        <h3>One equilibrium, not the truth.</h3>
+        <p>These evaluations are greedy: the policy takes its top move every time. Deterministic play exaggerates gaps, so treat the magnitudes as an upper bound. They also share one seed schedule, so the stability above is stability across checkpoints, not across fresh randomness.</p>
+        <p>And it is one policy's opinion. A converged self-play agent can be blind in ways nothing in its own league punishes, and a character it rates as unplayable may only be unplayable against <em>this</em> strategy.</p>
+        <p class="beat">Strong opinions, honestly measured. Not proofs about the game.</p>
+      </article>
+
+    </div>
+  </main>
+
+  <section class="closing">
+    <p class="eyebrow">That's the whole trick</p>
+    <h2>Random weights, forty hours,<br>one opinionated gunslinger.</h2>
+    <ol class="takeaways">
+      <li><span>01</span><p>It never saw a human play. Every habit it has, it invented by losing.</p></li>
+      <li><span>02</span><p>Who it trained against mattered more than any hyperparameter.</p></li>
+      <li><span>03</span><p>Its strongest opinion — defend first, steal second, shoot third — was never programmed.</p></li>
+    </ol>
+    <a class="play-link" href="index.html">Go take it on <span aria-hidden="true">→</span></a>
+  </section>
+
+  <footer>
+    <div>
+      <a href="index.html">← Back to the table</a>
+    </div>
+    <p>
+      Every figure on this page is generated from the training run in the
+      repository — <code>metrics.jsonl</code>, checkpoint metadata, and paired
+      greedy evaluations. Play-style and league numbers pool the final
+      <span data-style-window>—</span> updates of iteration
+      <span data-training-iterations>—</span>; meta numbers come from the
+      <span data-eval-games>—</span>-game self-evaluation of that same checkpoint.
+    </p>
+  </footer>
+
+  <script src="about-data.js"></script>
+  <script src="about.js"></script>
+</body>
+</html>

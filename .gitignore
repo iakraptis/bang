@@ -1,0 +1,9 @@
+/build*/
+/.cache/
+/runs/
+__pycache__/
+compile_commands.json
+web-sessions/
+web/dist-static/
+.cloudflare.env
+.wrangler/

@@ -1,0 +1,411 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "bang/action_space.hpp"
+
+namespace bang {
+
+inline constexpr int kObservationSize = 859;
+inline constexpr int kTrainingObservationBaseSize = kObservationSize;
+inline constexpr int kTrainingObservationSideOffset =
+    kTrainingObservationBaseSize;
+inline constexpr int kTrainingObservationOwnHandOffset =
+    kTrainingObservationSideOffset + kSideCount;
+inline constexpr int kTrainingObservationDiscardOffset =
+    kTrainingObservationOwnHandOffset + kCardInstanceCount;
+inline constexpr int kTrainingObservationKnownOwnHandOffset =
+    kTrainingObservationDiscardOffset + kCardInstanceCount;
+inline constexpr int kTrainingObservationKnownOpponentHandOffset =
+    kTrainingObservationKnownOwnHandOffset + kCardInstanceCount;
+inline constexpr int kTrainingObservationSeenOwnCharactersOffset =
+    kTrainingObservationKnownOpponentHandOffset + kCardInstanceCount;
+inline constexpr int kTrainingObservationSeenOpponentCharactersOffset =
+    kTrainingObservationSeenOwnCharactersOffset + kCharacterCount;
+inline constexpr int kTrainingObservationSize =
+    kTrainingObservationSeenOpponentCharactersOffset + kCharacterCount;
+
+inline constexpr int kPrivilegedPlayerHandOffset = 0;
+inline constexpr int kPrivilegedPlayerDeckOffset =
+    kPrivilegedPlayerHandOffset + kCardInstanceCount;
+inline constexpr int kPrivilegedPlayerReserveOffset =
+    kPrivilegedPlayerDeckOffset + kCardInstanceCount;
+inline constexpr int kPrivilegedPlayerSize =
+    kPrivilegedPlayerReserveOffset + kCharacterCount;
+inline constexpr int kPrivilegedCommonDeckOffset =
+    kPrivilegedPlayerSize * kSideCount;
+inline constexpr int kPrivilegedObservationSize =
+    kPrivilegedCommonDeckOffset + kCardInstanceCount;
+
+enum class Phase : std::uint8_t {
+  kChooseActive,
+  kPlay,
+  kDiscard,
+  kRespondToHit,
+  kChooseReveal,
+  kChooseRemington,
+  kForcedDiscard,
+  kChooseCarbine,
+  kChooseShotgun,
+  kDuelResponse,
+  kChooseWagonDiscard,
+  kChooseGeneralStore,
+  kChooseSchoolmarm,
+  kChooseStealing,
+  kChooseAbility,
+  kTerminal,
+};
+
+class FastRng {
+ public:
+  explicit FastRng(std::uint64_t seed);
+  std::uint64_t NextU64();
+  std::size_t USize(std::size_t upper);
+
+  template <class T>
+  void Shuffle(std::vector<T>& values) {
+    for (std::size_t index = values.size(); index > 1; --index) {
+      const std::size_t swap_with = USize(index);
+      std::swap(values[index - 1], values[swap_with]);
+    }
+  }
+
+ private:
+  std::uint64_t state_;
+};
+
+struct CharacterState {
+  int character_id = -1;
+  int life = 0;
+  std::vector<int> equipment;
+};
+
+struct PlayerState {
+  Side side = Side::kLaw;
+  std::array<CharacterState, 2> positions{};
+  int active_position = 0;
+  std::vector<int> reserve;
+  std::vector<int> deck;
+  std::vector<int> hand;
+  bool personal_deck_exhausted = false;
+};
+
+struct GameConfig {
+  std::uint64_t seed = 1;
+  int characters_per_side = 4;
+  bool shuffle_decks = true;
+  bool shuffle_characters = true;
+  std::array<std::vector<int>, kSideCount> character_rosters{};
+  std::array<std::vector<int>, kSideCount> starting_decks{};
+};
+
+class GameState {
+ public:
+  explicit GameState(GameConfig config = {});
+
+  int CurrentPlayer() const;
+  int TurnPlayer() const;
+  Phase CurrentPhase() const;
+  bool IsTerminal() const;
+  int Winner() const;
+  int TurnNumber() const;
+  const std::array<PlayerState, kSideCount>& Players() const;
+  const std::vector<int>& DiscardPile() const;
+  const std::vector<int>& CommonDeck() const;
+  const std::vector<int>& ChoiceCards() const;
+  const std::vector<int>& RevealedCards() const;
+
+  enum class RevealReason : std::uint8_t {
+    kBarrel,
+    kDynamite,
+    kRattlesnake,
+    kSidCurry,
+  };
+  // One entry per resolved reveal (card flipped off a deck for Dynamite,
+  // Rattlesnake, Barrel, …). Sequence numbers grow monotonically so a UI can
+  // animate only the reveals it has not shown yet; the list keeps a bounded
+  // tail of recent events.
+  struct RevealEvent {
+    int sequence = 0;
+    RevealReason reason = RevealReason::kBarrel;
+    int player = -1;
+    int card_instance = -1;
+    bool triggered = false;  // whether the reveal's effect fired
+  };
+  const std::vector<RevealEvent>& RevealEvents() const;
+
+  bool CommonDeckCreated() const;
+  bool SetupComplete() const;
+  bool ChoiceCardsVisibleTo(int observer) const;
+  std::vector<int> KnownHandCards(int observer, int player) const;
+
+  std::vector<int> LegalActions() const;
+  std::vector<std::pair<int, ActionFeature>> LegalActionFeatures() const;
+  int ActingCharacterId(int action_id) const;
+  // The character whose ability is waiting on a decision, or -1 when no
+  // ability decision is pending. A UI needs it to explain what the choice is
+  // about — the phase alone covers a dozen different abilities.
+  int PendingAbilityCharacter() const;
+  void ApplyAction(int action_id);
+  std::array<float, kObservationSize> ObservationTensor(int observer) const;
+  std::array<float, kTrainingObservationSize> TrainingObservationTensor(
+      int observer) const;
+  std::array<float, kPrivilegedObservationSize> PrivilegedObservationTensor(
+      int observer) const;
+  std::array<float, kSideCount> Returns() const;
+
+ private:
+  enum class ResponseKind : std::uint8_t {
+    kAvoid,
+    kAnyHandCard,
+    kHitCard,
+  };
+  enum class StartTurnStep : std::uint8_t {
+    kNone,
+    kDynamite,
+    kRattlesnake,
+    kStampede,
+    kDraw,
+  };
+  enum class ResumeKind : std::uint8_t {
+    kPlay,
+    kStartTurn,
+    kPendingEffect,
+    kMovement,
+    kEffectChoice,
+    kDamageReaction,
+    kElimination,
+  };
+  enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango };
+
+  struct PendingHit {
+    int attacker = -1;
+    int target = -1;
+    int target_position = -1;
+    int resume_player = -1;
+    CardName source = CardName::kColt;
+    bool barrel_attempted = false;
+    ResponseKind response = ResponseKind::kAvoid;
+    int avoids_required = 1;
+    int avoids_played = 0;
+    bool return_fire_pending = false;
+    int counter_character = -1;
+    bool sid_attempted = false;
+    ResumeKind resume_kind = ResumeKind::kPlay;
+    int source_character = -1;
+  };
+
+  struct PendingReveal {
+    RevealReason reason = RevealReason::kBarrel;
+    int player = -1;
+    int position = -1;
+    int equipment_instance = -1;
+  };
+
+  struct DamageReaction {
+    int character_id = -1;
+    int player = -1;
+    int remaining = 0;
+    PendingHit continuation{};
+    bool choosing_origin = false;
+  };
+
+  struct DeferredEffect {
+    std::optional<PendingHit> hit;
+    std::optional<DamageReaction> reaction;
+  };
+
+  struct PendingElimination {
+    int player = -1;
+    int position = -1;
+    int character_id = -1;
+    int bull_player = -1;
+    int bull_picks = 0;
+    int bill_player = -1;
+    PendingHit continuation{};
+    std::vector<DeferredEffect> deferred_effects;
+  };
+
+  struct PendingDamage {
+    int player = -1;
+    int position = -1;
+    int remaining = 0;
+    int source_player = -1;
+    PendingHit continuation{};
+  };
+
+  GameConfig config_;
+  std::array<PlayerState, kSideCount> players_{};
+  std::vector<int> discard_;
+  std::array<std::vector<int>, kSideCount> public_hand_cards_{};
+  std::vector<int> common_deck_;
+  bool common_deck_created_ = false;
+  int turn_player_ = 0;
+  int decision_player_ = 0;
+  int turn_number_ = 1;
+  Phase phase_ = Phase::kChooseActive;
+  std::array<bool, kSideCount> active_chosen_{};
+  std::array<std::array<bool, kCharacterCount>, kSideCount>
+      seen_characters_{};
+  int winner_ = -1;
+  bool swapped_this_turn_ = false;
+  int bang_cards_played_ = 0;
+  std::array<bool, kCharacterCount> ability_used_this_turn_{};
+  int pending_ability_ = -1;
+  int ability_stage_ = 0;
+  int pending_replicated_card_ = -1;
+  std::optional<PendingHit> pending_hit_;
+  std::optional<PendingHit> queued_hit_;
+  std::vector<PendingHit> continuation_hits_;
+  std::vector<PendingHit> hit_sequence_;
+  std::vector<DeferredEffect> deferred_effects_;
+  std::vector<DamageReaction> damage_reaction_stack_;
+  std::optional<PendingDamage> pending_damage_;
+  std::vector<PendingElimination> elimination_stack_;
+  std::vector<std::pair<int, int>> deferred_eliminations_;
+  bool hit_sequence_active_ = false;
+  bool defer_eliminations_ = false;
+  int hit_sequence_resume_player_ = -1;
+  std::vector<int> choice_cards_;
+  bool choice_cards_public_ = false;
+  int effect_actor_ = -1;
+  int effect_target_position_ = -1;
+  std::optional<PendingReveal> pending_reveal_;
+  std::vector<int> revealed_cards_;
+  std::vector<RevealEvent> reveal_events_;
+  int reveal_sequence_ = 0;
+  int optional_effect_player_ = -1;
+  int optional_effect_resume_player_ = -1;
+  std::optional<PendingHit> optional_effect_hit_;
+  int pending_draw_count_ = 0;
+  std::vector<MovementTrigger> movement_triggers_;
+  int movement_mover_ = -1;
+  ResumeKind movement_resume_kind_ = ResumeKind::kPlay;
+  StartTurnStep start_turn_step_ = StartTurnStep::kNone;
+  FastRng rng_;
+
+  void InitializePlayers();
+  void StartTurn();
+  void AdvanceStartTurn();
+  void FinishTurn();
+  void DrawCards(int player, int count);
+  void DrawOne(int player);
+  void DrawTurnCards(int count);
+  void FinishPatGarret(bool draw);
+  std::optional<int> TakeTopCard(int player);
+  std::optional<int> TakeTopCommonCard();
+  void RefillCommonDeck();
+  void DiscardFromHand(int player, int card_instance);
+  void MarkHandCardPublic(int player, int card_instance);
+  void ForgetPublicHandCard(int player, int card_instance);
+  bool SwapCharacters(int player, bool voluntary,
+                      ResumeKind resume_kind = ResumeKind::kPlay);
+  bool AdvanceMovementTriggers(bool resume_when_complete);
+  void ResumeAfterMovement();
+  int LivingCharacterCount(int player) const;
+  int HandLimit(int player) const;
+  bool HasCardInHand(int player, int card_instance) const;
+  bool HasEquipment(int player, int position, CardName name) const;
+  bool HasActiveEquipment(int player, CardName name) const;
+  bool TargetHasAbility(int player, int position, CharacterName name) const;
+  bool IsCharacterAbilityActive(int player, CharacterName name) const;
+  int LivingCharacterPosition(int player, CharacterName name) const;
+  bool CanProvideHit(int player, int position, int card_instance) const;
+  int BangCardAllowance(int player) const;
+  std::vector<int> CattleKatieEquipment(int player) const;
+  std::optional<std::pair<int, int>> FindEquipment(int player, CardName name) const;
+  std::pair<int, int> ResolveTarget(int actor, Target target) const;
+  bool IsSupportedEquipment(CardName name) const;
+  bool IsSupportedBang(CardName name) const;
+  bool IsSupportedAction(CardName name) const;
+  void PlaceEquipment(int actor, int card_instance, Target target);
+  void RemoveEquipment(int player, int position, int card_instance);
+  void ResolveBang(int card_instance, Target target);
+  void ResolveAsColt(int card_instance, Target target);
+  void ResolveActivatedAbility(CharacterName character);
+  void FinishCattleKatie(int equipment_instance);
+  void FinishSoundanceKid(int card_instance);
+  void FinishPearlHatCost(int card_instance);
+  void FinishPearlHatEffect(int source_instance, Target target);
+  std::vector<int> PearlHatActions() const;
+  std::vector<int> PearlHatActionsFor(int source_instance) const;
+  bool CanUsePearlHat() const;
+  void FinishJango(bool draw);
+  void CompleteActivatedAbility(CharacterName character);
+  void ResolveAction(int card_instance, Target target);
+  void ResolveActionEffect(CardName name, Target target);
+  void BeginDuel(Target target);
+  void FinishDuelResponse(std::optional<int> card_instance);
+  void BeginWagon();
+  void FinishWagon(int discarded_instance);
+  void BeginGeneralStore();
+  void FinishGeneralStorePick(int card_instance);
+  void BeginSchoolmarm();
+  void FinishSchoolmarm(std::optional<int> equipment_instance);
+  void BeginStealing();
+  void FinishStealingEquipment(int equipment_instance);
+  void FinishStealingHand(Side origin);
+  void FinishEffectChoice();
+  std::vector<int> SelectableEquipment(int actor) const;
+  void ResolveReturnFire(int card_instance);
+  void RecordAvoid(bool return_fire, int counter_character = -1);
+  void BeginSidCurryReveal();
+  void BeginBarrelReveal(int barrel_instance);
+  void BeginReveal(PendingReveal reveal);
+  void FinishReveal(int selected_index);
+  void MoveEquipment(int from_player, int from_position, int card_instance,
+                     int to_player, int to_position);
+  void BeginHitSequence(std::vector<PendingHit> hits, int resume_player);
+  void AdvanceHitSequence();
+  void ContinueAfterResolvedHit(const PendingHit& hit);
+  bool BeginWildBillReaction(
+      int owner, int actor, ResumeKind resume_kind,
+      std::optional<int> equipment_position = std::nullopt);
+  bool BeginAlanPinkertoonHits(int player, int count,
+                              const PendingHit& continuation);
+  bool BeginOpponentDamageReaction(int player, int character_id, int count,
+                                   int source_player,
+                                   const PendingHit& continuation);
+  bool BeginWyattEarReaction(const PendingHit& hit,
+                             std::optional<PendingHit> next_hit);
+  void BeginElimination(
+      int player, int position, const PendingHit& continuation,
+      std::vector<DeferredEffect> deferred_effects = {});
+  void FinishBullAndersonEquipment(int equipment_instance);
+  void FinishBullAndersonHand(Side origin);
+  void FinishBullAnderson();
+  void FinishBillTightman(bool draw);
+  bool BullAndersonHasChoices() const;
+  void ResumeElimination();
+  void FinalizeElimination();
+  void CompleteElimination();
+  void BeginDamage(int player, int position, int amount, int source_player,
+                   const PendingHit& continuation);
+  void ApplyPendingDamage();
+  void FinishBuffaloBell(bool redirect);
+  void ActivateDamageReaction(DamageReaction reaction);
+  void ResumeDamageReaction();
+  void FinishDamageReaction(bool accept);
+  void FinishSlimPoetHand(Side origin);
+  void ResolveHit();
+  void ActivatePendingHit(PendingHit hit);
+  void ResolveAvoidedHit(const PendingHit& hit,
+                         std::optional<PendingHit> next_hit,
+                         bool check_wyatt = true);
+  void FinishRemingtonChoice(bool draw);
+  void FinishForcedDiscard(int card_instance);
+  void FinishCarbineChoice(int equipment_instance);
+  void FinishShotgunChoice(bool opponent);
+  void ResumeAfterPendingEffect();
+  std::vector<int> ActiveEquipmentInstances() const;
+  void ApplyAvoidedHitEffects(const PendingHit& hit);
+  void Heal(int player, int position, int amount);
+  int LoseLife(int player, int position, int amount);
+  void RecordVisibleCharacters();
+};
+
+}  // namespace bang
