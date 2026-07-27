@@ -430,8 +430,9 @@
       const fallen = game.setupComplete;
       return `<div class="char-slot" data-zone="${zone}">
         <article class="char ${fallen ? "eliminated" : "facedown"}"
+          aria-label="${fallen ? "Fallen character" : "Face-down character"}"
           ${tipAttr(fallen ? "Fallen" : "Face down", fallen ? "This seat is empty" : "Revealed once both sides commit")}>
-          <span class="char-glyph">${fallen ? "☠" : "?"}</span>
+          ${fallen ? '<span class="char-glyph">☠</span>' : ""}
         </article>
       </div>`;
     }
