@@ -20,6 +20,10 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Deterministic simulation smoke
         run: ./build/bang_duel simulate 1000 42 4
+      - name: Web session smoke
+        run: ./build/bang_duel web-smoke
+      - name: Browser policy smoke
+        run: ./build/bang_duel static-policy-smoke policy/static-policy.json
 
   static-web:
     runs-on: ubuntu-latest

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Play the trained agent
+    url: https://bang.matehegedus.com
+    about: The live browser game, running the current champion policy.
+  - name: How to contribute
+    url: https://github.com/hmate9/bang/blob/main/CONTRIBUTING.md
+    about: Code contributions and trained-checkpoint submissions.

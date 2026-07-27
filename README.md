@@ -1,13 +1,46 @@
-# BANG! The Duel simulation engine
+# BANG! The Duel — a small PPO project
 
-This repository is building a deterministic, high-throughput implementation of
-the base **BANG! The Duel** rules for AI self-play and a browser game.
+**[▶ Play against the trained agent at bang.matehegedus.com](https://bang.matehegedus.com)**
+— no install, no account, runs entirely in your browser.
 
-The repository includes the audited native engine, a CPU-optimized League PPO
-training stack, paired-seed evaluation, and an engine-backed browser table that
-can load the selected trained policy.
+This is a deliberately small project that explores one question:
 
-## Build and test
+> How far can plain PPO self-play get on an **imperfect-information board game**,
+> on a single CPU, in a couple of days?
+
+Not a research framework. Not a general game platform. One game, one engine, one
+training stack, one deployable agent — small enough to read end to end in an
+afternoon.
+
+**BANG! The Duel** is a good subject: two players, hidden hands, hidden setup
+choices, 31 card types, 24 asymmetric characters (12 per side), and a branching
+reaction system where a single BANG! can cascade through several optional
+responses. Half the board state is secret, so two different hidden hands can
+produce the exact same observation. The agent has to play the average.
+
+---
+
+## What's here
+
+| Piece | Where | Size |
+|---|---|---|
+| Deterministic C++20 rules engine | `src/game.cpp`, `include/bang/game.hpp` | ~1.7M decisions/sec, single core |
+| League PPO trainer (C++ / LibTorch) | `src/training.cpp`, `tools/train.py` | 222k-param default actor |
+| Browser-native inference (no LibTorch) | `src/static_policy.cpp` | plays from a 1-file JSON policy |
+| Web table (native server + WASM) | `web/`, `src/web.cpp` | zero rules logic in JavaScript |
+| Trained champion policy | `policy/static-policy.json` | what the live site plays |
+
+Everything shares one source of rules truth. The frontend calls the engine; it
+never reimplements a rule.
+
+---
+
+## Getting started
+
+### 1. Build and test (about a minute)
+
+Needs CMake ≥ 3.24 and a C++20 compiler — nothing else. Node and Python 3 are
+optional; their test suites are skipped if you don't have them.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -15,186 +48,180 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Run deterministic native simulations:
+### 2. See the engine run
 
 ```sh
-./build/bang_duel simulate 1000 42 4
+./build/bang_duel simulate 10000 42 4
+# games=10000 law_wins=5414 outlaw_wins=4586 decisions_per_second=1740996
 ```
 
-## Train an agent
+Every game is reproducible from its seed and action sequence — all randomness is
+owned by the state and seeded through `GameConfig`.
 
-The training build uses LibTorch. On this machine, the wrapper discovers the
-installed CPU PyTorch package, builds the optimized binary, runs both native and
-end-to-end training tests, and then starts a resumable 48-hour campaign:
-
-```sh
-./train.sh
-```
-
-First run the short complete rehearsal if you want to validate the entire
-bootstrap → league → tournament → champion lifecycle:
-
-```sh
-./train.sh --rehearsal --run-dir runs/rehearsal
-```
-
-Progress is printed as compact PPO telemetry and mirrored to
-`runs/bang_league_ppo/progress.log`; complete native output is retained in
-`native.log`, and machine-readable metrics are appended to
-`main/metrics.jsonl`. Live summaries cover rolling and per-seat strength,
-opportunity-adjusted play style, policy/critic health, throughput, and
-checkpoint ETA. Each league chunk also runs paired fixed benchmarks against
-the heuristic, bootstrap policy, and previous chunk. Every five chunks, the
-latest checkpoint also plays 2,048 greedy games against itself to report
-character win rates, pair synergies, cross-side matchups, active-character
-effects, reserve entry, elimination, and game length. `Ctrl-C` finishes the
-active PPO update, commits a checkpoint, and exits. Run the same command again
-to resume with the optimizer, league, time deadline, and evaluation state
-intact.
-
-The campaign trains from random initialization against heuristic and random
-anchors, then uses frozen-current and prioritized historical opponents. It
-selects `champion/policy.pt` with a paired common-seed round robin. See
-[the training guide](docs/training.md) for architecture, controls, artifacts,
-evaluation methodology, and limitations.
-
-## Play in the browser
-
-Start the local server with the frontier heuristic:
+### 3. Play locally
 
 ```sh
 ./build/bang_duel web 8765 127.0.0.1
 ```
 
-Or play a completed training campaign and fail closed if its checkpoint is
-missing or incompatible:
+Open <http://127.0.0.1:8765>. The server owns the session and plays the other
+side with the built-in heuristic. Pick your side, a 2–12 character roster, and
+an optional seed from the **New duel** dialog.
+
+To play the trained agent locally instead of the heuristic, build the static
+webapp (below) or point the server at a training run with `--require-trained`.
+
+### 4. (Optional) Build the static webapp
+
+The whole engine compiles to WebAssembly, so the production site is just files
+on a static host — no backend, no API calls. Requires Emscripten (`em++`).
 
 ```sh
-./build-train/bang_duel web \
-  --run-dir runs/bang_league_ppo \
-  --require-trained
-```
-
-Then open [http://127.0.0.1:8765](http://127.0.0.1:8765). The server owns every
-game session and automatically advances the non-human side with either the
-validated trained checkpoint or the legal-action heuristic. Choose either
-side, a 2–12 character roster, and an optional deterministic seed from the
-**New duel** dialog. Training and checkpoint inference use the standard
-four-character duel. Every visible card and in-play character includes concise
-engine-owned rules text, including Equipment and legal-action previews.
-
-The browser receives a player-scoped JSON view: opponent hands and reserves
-stay masked, simultaneous setup choices remain hidden until both sides commit,
-and every displayed action ID comes directly from `LegalActions()`. The
-frontend contains no parallel rules implementation.
-
-### Build a completely static webapp
-
-The game engine can run in the browser as WebAssembly, so the production
-webapp needs only a static file host and makes no API requests:
-
-```sh
-tools/build_static_web.sh web/dist-static
+tools/build_static_web.sh web/dist-static policy/static-policy.json
 python3 -m http.server 8765 --directory web/dist-static
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The generated directory
-contains the HTML, JavaScript, CSS, card images, and WASM engine and can be
-uploaded as-is to any static host. Emscripten's `em++` compiler is required to
-build it. Assets use relative URLs, so the directory can also be hosted below a
-path prefix. The build also includes `about.html`, a scroll-driven account of
-the game, League PPO system, network architecture, training run, and learned
-meta. Its figures are generated from the repository's real training metrics
-and checkpoint evaluations.
+That is exactly what CI deploys to bang.matehegedus.com on every push to `main`.
+The bundle also contains `about.html`, a scroll-driven explainer of the game, the
+training system, and the learned meta, with figures generated from the real
+training metrics.
 
-Like the native server's fallback mode, the static build uses the frontier
-heuristic when no policy is supplied. To embed a trained checkpoint, export it
-to the small browser-native inference format and pass it to the builder:
+---
 
-```sh
-python3 tools/export_static_policy.py \
-  runs/bang_league_ppo/main/latest.pt \
-  /tmp/bang-policy.json
-tools/build_static_web.sh web/dist-static /tmp/bang-policy.json
-```
+## Train your own agent
 
-The exported actor runs directly in C++/WASM without LibTorch. Sessions live
-in WASM memory and therefore start fresh after a page reload; use the native
-server when durable sessions are required. Pass the training run as the
-optional third builder argument to refresh the about-page figures:
+Needs Python 3 and a CPU PyTorch install. `train.sh` configures an optimized
+build, runs the full test suite, then starts a resumable campaign.
 
 ```sh
-tools/build_static_web.sh \
-  web/dist-static \
-  /tmp/bang-policy.json \
-  runs/bang_league_ppo
+# seconds-long rehearsal of the whole bootstrap → league → tournament lifecycle
+./train.sh --rehearsal --run-dir runs/rehearsal
+
+# the real thing: 48 hours, last hour reserved for champion selection
+./train.sh
 ```
 
-### Continuous deployment
+`Ctrl-C` finishes the current PPO update, commits a checkpoint, and exits. Run
+the same command again to resume with optimizer, league, deadline, and
+evaluation state intact.
 
-Every successful push to `main` deploys the trained static webapp to
-Cloudflare Pages through `.github/workflows/ci.yml`. Configure these GitHub
-repository settings before the first deployment:
+**Watch out for BLAS.** Pin `OPENBLAS_NUM_THREADS` (train.sh exports `6`).
+Leaving it unset lets OpenBLAS oversubscribe against Torch's own thread pool and
+measured *slower* than unoptimized reference BLAS — a 13x difference.
 
-- Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
-- Variables: `CLOUDFLARE_PAGES_PROJECT`, `CLOUDFLARE_PAGES_DOMAIN`
+Full details, telemetry reference, and artifact layout:
+**[docs/training.md](docs/training.md)**.
 
-The Cloudflare token needs permission to deploy the configured Pages project.
-The browser policy committed at `policy/static-policy.json` makes the build
-self-contained; update it from a complete checkpoint when promoting a newer
-agent:
+---
 
-```sh
-python3 tools/export_static_policy.py \
-  runs/bang_league_ppo/main/latest.pt \
-  policy/static-policy.json
-```
+## How it works
 
-Cloudflare Pages serves the generated files as static assets without invoking
-Pages Functions.
-
-The simulator currently resolves the core hit/avoid flow and every base card,
-including ordered start-of-turn hazards, multi-target effects, public drafts,
-private draw choices, and random draws that preserve visible card backs.
-The first character layer covers passive draw/BANG limits, Annie and Toco card
-transformations, Jack Ransome target overrides, and the Babe Leroy, Cattle
-Katie, and Soundance Kid once-per-turn abilities. Tex Killer's two-card BANG!
-defense and Tom Thorn's swap-triggered hits preserve explicit continuations.
-Alan Pinkertoon's non-last-life counter-hits also work across ordinary hits,
-multi-target cards, and start-of-turn damage. Dalon Ranger and Slim Poet expose
-optional per-life reactions, while Jango participates in ordered movement
-triggers. Pat Garret exposes his second draw and may draw from the opposing
-deck on a Horseshoe; publicly known hand cards remain visible until played or
-discarded. Sid Curry's reveal-based avoid and delayed counter integrates with
-Bart, Barrel, Tex Killer, and multi-target continuations. Wyatt Ear adds
-separate optional draws after missed BANGs, including Remington and deferred
-Fanning reactions. Pearl Hat captures a discard-top Action, pays a selected
-hand-card cost, and resolves the copied effect through the normal card engine.
-Bull Anderson now chooses his cards before elimination cleanup and the normal
-reward; Bill Tightman receives his separate optional draw afterward.
-Buffalo Bell can distribute multi-point damage one point at a time from either
-position without bypassing the original hit response. Wild Bill's automatic
-hits cover every opponent-driven hand and Equipment removal path, including
-nested Bull Anderson eliminations. A rulebook audit additionally covers
-Annie/Toco Duel and Indians! payments, Scope with non-BANG hits, visible card
-backs for every random selection, and the ordering of deferred Wyatt/Sid
-consequences. The detailed evidence is tracked in
-[the rulebook coverage document](docs/rulebook_coverage.md).
-
-## Engine contract
-
-`bang::GameState` follows the same useful interface shape as the reference
-Dune project:
+**Engine contract** — `bang::GameState` exposes the interface an RL stack needs:
 
 - `LegalActions()` returns the complete legal decision set;
-- `ApplyAction()` rejects anything outside that set;
-- `ObservationTensor(observer)` exposes public state plus that observer's
-  private hand, without exposing the opponent's private cards;
-- `TrainingObservationTensor(observer)` adds exact observer-owned and
-  legitimately known card identities without leaking hidden state;
-- `LegalActionFeatures()` maps stable legal IDs to semantic features so
-  equivalent physical card copies share statistical strength;
-- `Returns()` provides terminal zero-sum results.
+- `ApplyAction()` rejects anything outside it;
+- `ObservationTensor(observer)` gives public state plus that observer's private
+  hand, and nothing of the opponent's;
+- `TrainingObservationTensor(observer)` adds legitimately-known card identities
+  without leaking hidden state;
+- `LegalActionFeatures()` maps stable action IDs to semantic features, so
+  equivalent copies of a card share statistical strength;
+- `Returns()` gives terminal zero-sum results.
 
-All randomness is owned by the state and seeded through `GameConfig`, making a
-game reproducible from its seed and action sequence.
+**The actor scores legal actions, not slots.** Instead of learning 997 unrelated
+output logits, it embeds each currently-legal action and scores it against the
+state — so the action space can be large and sparse without the network having to
+memorize its indexing.
+
+**Information boundaries are tested, not assumed.** An auxiliary training critic
+may see full environment state, but that privileged tensor never reaches the
+actor or the browser policy, and tests enforce it.
+
+**League PPO.** Clipped updates, GAE, normalized advantages, entropy bonus,
+gradient clipping, target-KL early stopping. Opponents are a mixture of a frozen
+frontier snapshot, prioritized historical snapshots, a tactical heuristic, and
+random play. Champion selection is a paired common-seed round robin — both seats
+for every seed, to cancel first-player and deal variance.
+
+More: **[docs/architecture.md](docs/architecture.md)** ·
+**[docs/large_model_design.md](docs/large_model_design.md)**
+
+---
+
+## What the agent learned
+
+From 5 successive checkpoints × 2048 greedy self-play games
+(**[docs/meta_analysis.md](docs/meta_analysis.md)**):
+
+- **The game is outlaw-favoured by ~11 points** — 55.5% / 44.5%, stable across
+  every checkpoint measured.
+- **Character power spread is wider than the side imbalance** — 38.5% to 64.8%
+  win rate depending on who you draw.
+- **It plays control, not aggression.** Defends when able 88.4% of the time,
+  attacks only 45.1%. The most-picked card is `stealing` (61.6%); `dynamite` is
+  dead last (14.3%) despite being offered 33,000 times.
+- **Pairs are near-additive** — this is a power meta, not a combo meta.
+
+Read the caveats section before quoting any of that. These are greedy
+evaluations of one converged policy that had been plateaued for ~400 iterations;
+they describe *this equilibrium*, not proven facts about the game.
+
+### Known limitations
+
+- The actor is feed-forward — no recurrent belief state over the action trace.
+- Rewards are terminal win/loss only, so early learning is slow.
+- Hyperparameters are conservative CPU defaults, not a completed search.
+- No statistical promotion gates or human-match tracking, so **no superhuman
+  claims** are being made here.
+
+Each of these is a good first contribution.
+
+---
+
+## Contributing
+
+Contributions are very welcome — this project is small on purpose, which makes
+it an easy one to actually land a change in.
+
+Two paths, both documented in **[CONTRIBUTING.md](CONTRIBUTING.md)**:
+
+1. **Code contributions.** Run `scripts/check.sh` before you open a PR. It is
+   the same gate CI runs — build, all tests, deterministic simulation, and the
+   browser-policy smoke test.
+2. **Trained checkpoints.** Trained a stronger agent? There is a documented
+   submission workflow: benchmark it against the current champion with paired
+   seeds, export it to the browser format, and open a PR with the numbers. A
+   winning policy replaces `policy/static-policy.json` and goes live.
+
+Good first issues: recurrent policy, reward shaping ablations, hyperparameter
+sweeps, rules coverage (see
+[docs/rulebook_coverage.md](docs/rulebook_coverage.md)), or web table UX
+(see [docs/web_ux_tasks.md](docs/web_ux_tasks.md)).
+
+---
+
+## Documentation map
+
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Engine design, state machine, hidden-information rules |
+| [docs/training.md](docs/training.md) | League PPO stack, telemetry, artifacts, evaluation |
+| [docs/large_model_design.md](docs/large_model_design.md) | The 10x network (`v3`) and where the capacity went |
+| [docs/meta_analysis.md](docs/meta_analysis.md) | What the converged policy actually plays |
+| [docs/rulebook_coverage.md](docs/rulebook_coverage.md) | Rules implemented vs the base rulebook |
+| [docs/web_ux_tasks.md](docs/web_ux_tasks.md) | Open web table improvements |
+
+---
+
+## License and attribution
+
+Code, docs, and build scripts: **[MIT](LICENSE)**.
+
+This is an **unofficial, non-commercial fan project**. BANG! and BANG! The Duel
+are trademarks of **dV Giochi**, with no affiliation to or endorsement by them.
+The card and character artwork in `web/cards/` and the rulebook PDF are the
+property of their copyright holders and are **not** covered by the MIT license —
+see [LICENSE](LICENSE) and [web/cards/README.md](web/cards/README.md). Rights
+holders can open an issue for removal.
+
+If you enjoy the game, [buy a copy](https://www.dvgiochi.com/).
