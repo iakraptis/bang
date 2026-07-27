@@ -34,17 +34,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--update-epochs", type=int, default=4)
     parser.add_argument("--minibatches", type=int, default=8)
     parser.add_argument("--torch-threads", type=int, default=min(6, os.cpu_count() or 1))
-    # v3 is ten times v2's width, so it moves the policy much further per
-    # gradient step: at matched iteration counts the measured approximate KL was
-    # 0.0020 for v2 at 3e-4, 0.0042 for v3 at 2e-4. Under v2's 0.015 trust region
-    # the v3 run tripped the KL early stop on 100% of its last 500 iterations and
-    # averaged 2.93 of 4 update epochs, which is why 355M environment steps only
-    # reached the strength v2 had at ~155M. 2e-4 with a 0.035 target keeps the
-    # full epoch budget available; the learning rate stays where the measured run
-    # had it so the trust region is the only variable that changed.
+    # v3 is ten times v2's width and moves the policy much further per gradient
+    # step: at matched iteration counts the measured approximate KL was 0.0020 for
+    # v2 at 3e-4 against 0.0042 for v3 at 2e-4. That keeps v3 pressed against this
+    # trust region — it tripped the KL early stop on 100% of a 500-iteration window
+    # and averaged 2.93 of 4 update epochs. Widening the region to 0.035 was tried
+    # at iteration 5491 and reverted: it bought ~0.8 epochs for about 300
+    # iterations, then re-saturated, and one window averaged KL 0.092 while the
+    # policy took oversized steps. Measured against the finished v2 run it cost 6.5
+    # points of win rate, 45.4% to 38.9% over 2048 paired games. The early stopping
+    # is a symptom of v3's step size, not the thing holding it back, and 0.015 is
+    # doing real work.
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
-    parser.add_argument("--target-kl", type=float, default=0.035)
+    parser.add_argument("--target-kl", type=float, default=0.015)
     parser.add_argument("--scouting-pairs", type=int, default=64)
     parser.add_argument("--final-pairs", type=int, default=512)
     parser.add_argument("--self-eval-games", type=int, default=2048)
