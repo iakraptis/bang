@@ -41,7 +41,8 @@ std::size_t FastRng::USize(std::size_t upper) {
 
 GameState::GameState(GameConfig config) : config_(std::move(config)), rng_(config_.seed) {
   const int roster_size =
-      static_cast<int>(CharacterIds(Side::kLaw, config_.mode).size());
+      static_cast<int>(std::min(CharacterIds(Side::kLaw, config_.mode).size(),
+                                CharacterIds(Side::kOutlaw, config_.mode).size()));
   if (config_.characters_per_side < 2 ||
       config_.characters_per_side > roster_size) {
     throw std::invalid_argument(
@@ -106,8 +107,9 @@ void GameState::InitializePlayers() {
     }
   }
 
-  DrawCards(PlayerIndex(Side::kLaw), 4);
-  DrawCards(PlayerIndex(Side::kOutlaw), 5);
+  for (const Side seat : {Side::kLaw, Side::kOutlaw}) {
+    DrawCards(PlayerIndex(seat), StartingHandSize(seat, config_.mode));
+  }
   decision_player_ = PlayerIndex(Side::kLaw);
   turn_player_ = PlayerIndex(Side::kLaw);
   phase_ = Phase::kChooseActive;

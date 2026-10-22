@@ -170,6 +170,19 @@ const JsonValue::Array& JsonArray(const JsonValue& value,
   return *array;
 }
 
+std::optional<GameMode> OptionalMode(const JsonValue::Object& object) {
+  const auto found = object.find("mode");
+  if (found == object.end()) return std::nullopt;
+  const auto* name = std::get_if<std::string>(&found->second.storage());
+  if (name == nullptr) throw std::invalid_argument("mode must be a string");
+  return GameModeFromName(*name);
+}
+
+// The faction a player plays (Law, Outlaw or Renegades), for labels.
+std::string SeatName(GameMode mode, int player) {
+  return std::string(FactionName(SeatFaction(static_cast<Side>(player), mode)));
+}
+
 std::optional<int> OptionalInt(const JsonValue::Object& object,
                                const std::string& key) {
   const auto found = object.find(key);
@@ -804,9 +817,9 @@ JsonValue ActionJson(const GameState& state, int action_id) {
 // What a card flipped off a deck did, in words. Several effects reveal for the
 // same "Barrel" symbol (a Barrel card, Sid Curry's ability), so the line names
 // the effect, the card, whose deck it came from, and the outcome.
-std::string RevealText(const GameState::RevealEvent& event) {
+std::string RevealText(const GameState::RevealEvent& event, GameMode mode) {
   const auto& card = GetCard(GetCardInstance(event.card_instance).name);
-  std::string side(SideName(static_cast<Side>(event.player)));
+  std::string side = SeatName(mode, event.player);
   if (!side.empty()) {
     side.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(side.front())));
   }
@@ -905,6 +918,14 @@ struct WebSession {
         bot_rng(session_seed ^ 0xa0761d6478bd642fULL) {}
 };
 
+JsonValue HandBacksJson(const std::vector<int>& hand) {
+  JsonValue::Array backs;
+  for (const int instance : hand) {
+    backs.emplace_back(std::string(SideName(GetCardInstance(instance).origin)));
+  }
+  return backs;
+}
+
 bool ValidSessionId(const std::string& id) {
   if (id.empty() || id.size() > 64) return false;
   return std::all_of(id.begin(), id.end(), [](unsigned char ch) {
@@ -1000,7 +1021,8 @@ class BangWebApp {
 
   JsonValue NewSession(std::optional<int> requested_seed,
                        std::optional<int> requested_human,
-                       std::optional<int> requested_characters) {
+                       std::optional<int> requested_characters,
+                       std::optional<GameMode> requested_mode = std::nullopt) {
     EvictIfFull();
     const int human = requested_human.value_or(0);
     if (human < 0 || human >= kSideCount) {
@@ -1014,10 +1036,11 @@ class BangWebApp {
                                    ? static_cast<std::uint64_t>(*requested_seed)
                                    : session_rng_.NextU64() & 0x7fffffffULL;
     auto session =
-        std::make_unique<WebSession>(NewSessionId(), seed, human, characters, config_.mode);
+        std::make_unique<WebSession>(NewSessionId(), seed, human, characters,
+                                     requested_mode.value_or(config_.mode));
     AppendLog(*session, -1,
               "New duel. You command the " +
-                  std::string(SideName(static_cast<Side>(human))) + " side.",
+                  SeatName(session->state.Mode(), human) + " side.",
               "");
     AdvanceAutomaticActions(*session);
     session->last_touch = ++touch_counter_;
@@ -1276,7 +1299,7 @@ class BangWebApp {
     // Reveals the engine resolved during this action, in the order it did.
     for (const auto& event : session.state.RevealEvents()) {
       if (event.sequence <= last_reveal) continue;
-      AppendLog(session, RevealOwner(event), RevealText(event),
+      AppendLog(session, RevealOwner(event), RevealText(event, session.state.Mode()),
                 "reveal(" + RevealReasonName(event.reason) + "," +
                     std::string(GetCard(GetCardInstance(event.card_instance).name).key) +
                     "," + (event.triggered ? "triggered" : "missed") + ")");
@@ -1425,8 +1448,10 @@ class BangWebApp {
         session.state.KnownHandCards(session.human_player, player);
     return JsonValue::Object{
         {"player", player},
-        {"side", std::string(SideName(state.side))},
+        {"side", SeatName(session.state.Mode(), player)},
         {"isHuman", player == session.human_player},
+        // Card backs are public: the Renegades' hand mixes both kinds.
+        {"handBacks", HandBacksJson(state.hand)},
         {"activePosition", reveal_characters ? JsonValue(state.active_position)
                                               : JsonValue(nullptr)},
         {"positions", std::move(positions)},
@@ -1462,8 +1487,7 @@ class BangWebApp {
           {"player", entry.player < 0 ? JsonValue(nullptr) : JsonValue(entry.player)},
           {"side", entry.player < 0
                        ? JsonValue("system")
-                       : JsonValue(std::string(
-                             SideName(static_cast<Side>(entry.player))))},
+                       : JsonValue(SeatName(session.state.Mode(), entry.player))},
           {"text", entry.text},
           {"engineText", entry.engine_text},
           {"sequence", static_cast<double>(entry.sequence)},
@@ -1496,6 +1520,7 @@ class BangWebApp {
         {"seed", static_cast<double>(session.seed)},
         {"humanPlayer", session.human_player},
         {"charactersPerSide", session.characters_per_side},
+        {"mode", std::string(GameModeName(session.state.Mode()))},
         {"currentPlayer", session.state.IsTerminal()
                               ? JsonValue(nullptr)
                               : JsonValue(session.state.CurrentPlayer())},
@@ -1727,7 +1752,8 @@ void HandleClient(SocketHandle client, BangWebApp& app, const WebConfig& config)
       SendJson(client, 200,
                app.NewSession(OptionalInt(body, "seed"),
                               OptionalInt(body, "humanPlayer"),
-                              OptionalInt(body, "charactersPerSide")));
+                              OptionalInt(body, "charactersPerSide"),
+                              OptionalMode(body)));
       return;
     }
     if (request.method == "POST" && EndsWith(request.path, "/action")) {

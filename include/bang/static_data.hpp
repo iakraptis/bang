@@ -32,7 +32,16 @@ enum class CardKind : std::uint8_t { kAction, kEquipment, kBang, kResource };
 // Which cards and characters a game deals. Reinforcements shuffles the
 // Renegade-Law cards and characters into the Law side and the Renegade-Outlaw
 // ones into the Outlaw side.
-enum class GameMode : std::uint8_t { kBase, kReinforcements };
+// Which cards each seat plays with. The engine always seats two players:
+// seat 0 (Side::kLaw) plays first, seat 1 (Side::kOutlaw) second; a card's
+// Side is its back. In The Third Group one seat plays the Renegades.
+enum class GameMode : std::uint8_t {
+  kBase,
+  kReinforcements,
+  kRenegadesVsLaw,     // Law (seat 0, 4 cards) vs Renegades (5 cards)
+  kRenegadesVsOutlaw,  // Outlaw (seat 0, 5 cards) vs Renegades (4 cards)
+};
+enum class Faction : std::uint8_t { kLaw, kOutlaw, kRenegades };
 enum class RevealSymbol : std::uint8_t { kBarrel, kSnake, kDynamite, kHorseshoe };
 
 enum class CardName : std::uint8_t {
@@ -178,6 +187,14 @@ const std::array<CardData, kCardNameCount>& Cards();
 const CardData& GetCard(CardName name);
 const std::array<CardInstanceData, kCardInstanceCount>& CardInstances();
 const CardInstanceData& GetCardInstance(int id);
+// The faction a seat plays in this mode, and its starting hand.
+Faction SeatFaction(Side seat, GameMode mode);
+std::string_view FactionName(Faction faction);
+int StartingHandSize(Side seat, GameMode mode);
+std::string_view GameModeName(GameMode mode);
+// Throws std::invalid_argument for an unknown name.
+GameMode GameModeFromName(std::string_view name);
+// The deck and roster of the faction sitting in `side`'s seat.
 std::vector<int> StartingDeck(Side side, GameMode mode = GameMode::kBase);
 const std::array<CharacterData, kCharacterCount>& Characters();
 const CharacterData& GetCharacter(int id);

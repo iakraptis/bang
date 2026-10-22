@@ -1804,6 +1804,57 @@ void TestElChindiAndKittyLeroy() {
   }
 }
 
+void TestThirdGroup() {
+  // The Renegades as their own side: their 40 cards and 12 characters
+  // against an unmixed Law or Outlaw side.
+  for (const auto mode : {bang::GameMode::kRenegadesVsLaw, bang::GameMode::kRenegadesVsOutlaw}) {
+    const bool vs_law = mode == bang::GameMode::kRenegadesVsLaw;
+    bang::GameConfig config;
+    config.seed = 3;
+    config.mode = mode;
+    bang::GameState state(config);
+    const auto& first = state.Players()[0];
+    const auto& renegades = state.Players()[1];
+    Require(first.hand.size() == (vs_law ? 4U : 5U) && renegades.hand.size() == (vs_law ? 5U : 4U),
+            "the Law starts with 4 cards, the Outlaws with 5, the Renegades with the other count");
+    const auto in_range = [](const std::vector<int>& cards, int low, int high) {
+      return std::all_of(cards.begin(), cards.end(),
+                         [&](int card) { return card >= low && card < high; });
+    };
+    Require(in_range(renegades.hand, 80, 120) && in_range(renegades.deck, 80, 120) &&
+                renegades.hand.size() + renegades.deck.size() == 40,
+            "the Renegades play all 40 Renegade cards");
+    Require(vs_law ? in_range(first.deck, 0, 40) && in_range(first.hand, 0, 40)
+                   : in_range(first.deck, 40, 80) && in_range(first.hand, 40, 80),
+            "their opponent plays the base deck of its side");
+    std::vector<int> characters = renegades.reserve;
+    for (const auto& position : renegades.positions) characters.push_back(position.character_id);
+    Require(in_range(characters, 24, 36), "the Renegades field Renegade characters");
+    Require(bang::SeatFaction(bang::Side::kLaw, mode) ==
+                (vs_law ? bang::Faction::kLaw : bang::Faction::kOutlaw),
+            "the Law or Outlaw side plays first");
+  }
+  int finished = 0;
+  for (const auto mode : {bang::GameMode::kRenegadesVsLaw, bang::GameMode::kRenegadesVsOutlaw}) {
+    for (std::uint64_t seed = 1; seed <= 40; ++seed) {
+      bang::GameConfig config;
+      config.seed = seed;
+      config.mode = mode;
+      config.characters_per_side = 4;
+      bang::GameState state(config);
+      bang::FastRng rng(seed * 104729U);
+      for (int step = 0; step < 5000 && !state.IsTerminal(); ++step) {
+        const auto legal = state.LegalActions();
+        Require(!legal.empty(), "a Third Group game always has a legal move");
+        state.ApplyAction(legal[rng.USize(legal.size())]);
+        RequireCardConservation(state);
+      }
+      if (state.IsTerminal()) ++finished;
+    }
+  }
+  Require(finished >= 72, "random Third Group games run to completion");
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5513,6 +5564,7 @@ int main() {
     TestJimLonghairAndMysticMaid();
     TestDutchHarryAndHickAddams();
     TestElChindiAndKittyLeroy();
+    TestThirdGroup();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

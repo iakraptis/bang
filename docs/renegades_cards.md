@@ -202,6 +202,7 @@ Renegade characters are dealt in Reinforcements but have no abilities yet.
 | Characters: Jim Longhair, Mystic Maid | Done, with tests |
 | Characters: Dutch Harry, Hick Addams | Done, with tests |
 | Characters: El Chindi, Kitty Leroy (all 12 characters done) | Done, with tests |
+| The Third Group (Renegades vs Law / Outlaw) and the web format picker | Done, with tests |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 
 ## Rules decisions

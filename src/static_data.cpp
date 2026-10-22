@@ -424,16 +424,72 @@ const CardInstanceData& GetCardInstance(int id) {
   return kCardInstances[static_cast<std::size_t>(id)];
 }
 
+Faction SeatFaction(Side seat, GameMode mode) {
+  switch (mode) {
+    case GameMode::kRenegadesVsLaw:
+      return seat == Side::kLaw ? Faction::kLaw : Faction::kRenegades;
+    case GameMode::kRenegadesVsOutlaw:
+      return seat == Side::kLaw ? Faction::kOutlaw : Faction::kRenegades;
+    case GameMode::kBase:
+    case GameMode::kReinforcements:
+      break;
+  }
+  return seat == Side::kLaw ? Faction::kLaw : Faction::kOutlaw;
+}
+
+std::string_view FactionName(Faction faction) {
+  switch (faction) {
+    case Faction::kLaw: return "law";
+    case Faction::kOutlaw: return "outlaw";
+    case Faction::kRenegades: return "renegades";
+  }
+  return "law";
+}
+
+int StartingHandSize(Side seat, GameMode mode) {
+  // The Law starts with 4 cards and the Outlaws with 5; the Renegades take
+  // whichever count their opponent does not.
+  const Faction faction = SeatFaction(seat, mode);
+  if (faction == Faction::kLaw) return 4;
+  if (faction == Faction::kOutlaw) return 5;
+  return SeatFaction(OtherSide(seat), mode) == Faction::kLaw ? 5 : 4;
+}
+
+std::string_view GameModeName(GameMode mode) {
+  switch (mode) {
+    case GameMode::kBase: return "base";
+    case GameMode::kReinforcements: return "reinforcements";
+    case GameMode::kRenegadesVsLaw: return "renegades_vs_law";
+    case GameMode::kRenegadesVsOutlaw: return "renegades_vs_outlaw";
+  }
+  return "base";
+}
+
+GameMode GameModeFromName(std::string_view name) {
+  for (const GameMode mode : {GameMode::kBase, GameMode::kReinforcements,
+                              GameMode::kRenegadesVsLaw, GameMode::kRenegadesVsOutlaw}) {
+    if (GameModeName(mode) == name) return mode;
+  }
+  throw std::invalid_argument(
+      "mode must be base, reinforcements, renegades_vs_law or renegades_vs_outlaw");
+}
+
 std::vector<int> StartingDeck(Side side, GameMode mode) {
   std::vector<int> result;
   result.reserve(kCardsPerSide + kRenegadeCardsPerSide);
-  const int first = side == Side::kLaw ? 0 : kCardsPerSide;
+  const Faction faction = SeatFaction(side, mode);
+  if (faction == Faction::kRenegades) {
+    // The Third Group: all 40 Renegade cards, both backs.
+    for (int id = kRenegadeLawFirstCard; id < kCardInstanceCount; ++id) result.push_back(id);
+    return result;
+  }
+  const int first = faction == Faction::kLaw ? 0 : kCardsPerSide;
   for (int id = first; id < first + kCardsPerSide; ++id) {
     result.push_back(id);
   }
   if (mode == GameMode::kReinforcements) {
     const int renegades =
-        side == Side::kLaw ? kRenegadeLawFirstCard : kRenegadeOutlawFirstCard;
+        faction == Faction::kLaw ? kRenegadeLawFirstCard : kRenegadeOutlawFirstCard;
     for (int id = renegades; id < renegades + kRenegadeCardsPerSide; ++id) {
       result.push_back(id);
     }
@@ -453,13 +509,18 @@ const CharacterData& GetCharacter(int id) {
 std::vector<int> CharacterIds(Side side, GameMode mode) {
   std::vector<int> result;
   result.reserve(kCharactersPerSide + kRenegadeCharactersPerSide);
-  const int first = side == Side::kLaw ? 0 : kCharactersPerSide;
+  const Faction faction = SeatFaction(side, mode);
+  if (faction == Faction::kRenegades) {
+    for (int id = kBaseCharacterCount; id < kCharacterCount; ++id) result.push_back(id);
+    return result;
+  }
+  const int first = faction == Faction::kLaw ? 0 : kCharactersPerSide;
   for (int id = first; id < first + kCharactersPerSide; ++id) {
     result.push_back(id);
   }
   if (mode == GameMode::kReinforcements) {
     const int renegades = kBaseCharacterCount +
-                          (side == Side::kLaw ? 0 : kRenegadeCharactersPerSide);
+                          (faction == Faction::kLaw ? 0 : kRenegadeCharactersPerSide);
     for (int id = renegades; id < renegades + kRenegadeCharactersPerSide; ++id) {
       result.push_back(id);
     }
