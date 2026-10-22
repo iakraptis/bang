@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -252,6 +253,10 @@ def main() -> int:
             (json.loads((resume_dir / "state.json").read_text()).get("retunes") or [])
         ) != 1:
             raise RuntimeError("an unchanged resume journaled a spurious retune")
+        # Switching on MMD changes the objective, so it is structural too.
+        mmd_switch = resume_with("--target-kl", str(retuned_kl), "--mmd-alpha", "0.1")
+        if mmd_switch.returncode == 0 or "mmdAlpha" not in mmd_switch.stderr:
+            raise RuntimeError("resume accepted switching on MMD mid-campaign")
 
         # The larger v3 architecture must survive every path that rebuilds a
         # module from checkpoint metadata rather than from a hardcoded preset.
@@ -305,6 +310,24 @@ def main() -> int:
         )
         if not large_static_web["ok"] or not large_static_web["ai"]["trained"]:
             raise RuntimeError("v3 static policy was not used by the browser session")
+        # The export must score moves like its checkpoint. Argmax may still
+        # differ on exact ties, so only near-zero gaps may disagree.
+        parity = json.loads(
+            run([str(binary), "static-policy-parity", str(large), str(large_static), "500"],
+                repo).stdout
+        )
+        if (
+            parity["maxAbsLogitDifference"] > 1e-4
+            or parity["widestDisagreementGap"] > 1e-5
+        ):
+            raise RuntimeError(f"v3 static export diverges from its checkpoint: {parity}")
+        # A .json opponent is the exported browser policy, played greedily.
+        against_static = json.loads(
+            run([str(binary), "evaluate", str(large), str(large_static), "4", "900001", "1"],
+                repo).stdout
+        )
+        if against_static["games"] != 8 or against_static["truncated"] != 0:
+            raise RuntimeError(f"evaluation against a static policy failed: {against_static}")
         crossed = subprocess.run([
             str(binary), "train",
             "--model", "v2",
@@ -318,6 +341,85 @@ def main() -> int:
         ], cwd=repo, text=True, capture_output=True)
         if crossed.returncode == 0 or "bang_structured_v3" not in crossed.stderr:
             raise RuntimeError("a v3 checkpoint was accepted for a v2 resume")
+
+        def device_train(directory: Path, device: str, iterations: int,
+                         resume: Path | None = None) -> subprocess.CompletedProcess[str]:
+            command = [
+                str(binary), "train",
+                "--model", "v2",
+                "--iterations", str(iterations),
+                "--batch-games", "2",
+                "--update-epochs", "1",
+                "--minibatches", "1",
+                "--torch-threads", "1",
+                "--checkpoint-dir", str(directory),
+                "--device", device,
+            ]
+            if resume is not None:
+                command.extend(["--resume", str(resume)])
+            return subprocess.run(command, cwd=repo, text=True, capture_output=True)
+
+        # The MMD magnet is part of the training bundle: stopping between
+        # magnet moves and resuming must reproduce an uninterrupted run exactly.
+        def mmd_train(directory: Path, iterations: int, resume: bool = False) -> None:
+            command = [
+                str(binary), "train",
+                "--model", "v2",
+                "--iterations", str(iterations),
+                "--batch-games", "2",
+                "--update-epochs", "1",
+                "--minibatches", "1",
+                "--torch-threads", "1",
+                "--seed", "5",
+                "--mmd-alpha", "0.2",
+                "--magnet-interval", "2",
+                "--checkpoint-dir", str(directory),
+            ]
+            if resume:
+                command.extend(["--resume", str(directory / "latest.pt")])
+            run(command, repo)
+
+        def last_metrics(directory: Path) -> dict[str, Any]:
+            lines = (directory / "metrics.jsonl").read_text().splitlines()
+            return json.loads(lines[-1])
+
+        straight_dir = Path(temporary) / "mmd-straight"
+        split_dir = Path(temporary) / "mmd-split"
+        mmd_train(straight_dir, 4)
+        mmd_train(split_dir, 3)
+        split_commit = json.loads((split_dir / "latest.pt.commit.json").read_text())
+        if split_commit.get("magnetIteration") != 2 or not (
+            split_dir / "latest.pt.magnet.pt"
+        ).is_file():
+            raise RuntimeError("the MMD magnet was not committed with the bundle")
+        mmd_train(split_dir, 4, resume=True)
+        straight, split = last_metrics(straight_dir), last_metrics(split_dir)
+        for key in ("magnetIteration", "magnetKl", "policyLoss", "entropy"):
+            if straight[key] != split[key]:
+                raise RuntimeError(
+                    f"MMD resume diverged on {key}: {straight[key]} != {split[key]}"
+                )
+        if not straight["magnetKl"] > 0:
+            raise RuntimeError("MMD reported no KL to its magnet")
+
+        bad_device = device_train(Path(temporary) / "bad-device", "tpu", 1)
+        if bad_device.returncode == 0:
+            raise RuntimeError("an unsupported --device was accepted")
+        accelerated_dir = Path(temporary) / "accelerated"
+        accelerated = device_train(accelerated_dir, "cuda", 1)
+        if accelerated.returncode != 0 and "sees no CUDA device" in accelerated.stderr:
+            print("CUDA unavailable; skipping accelerated training checks")
+        else:
+            if accelerated.returncode != 0 or "learner cuda" not in accelerated.stdout:
+                raise RuntimeError(f"CUDA training failed:\n{accelerated.stderr}")
+            # A GPU run's checkpoint, optimizer included, must resume on a CPU.
+            accelerated_latest = accelerated_dir / "latest.pt"
+            resumed = device_train(accelerated_dir, "cpu", 2, accelerated_latest)
+            if resumed.returncode != 0:
+                raise RuntimeError(f"CUDA checkpoint did not resume on CPU:\n{resumed.stderr}")
+            metadata = json.loads(Path(str(accelerated_latest) + ".metadata.json").read_text())
+            if metadata["iteration"] != 2:
+                raise RuntimeError("CPU resume of a CUDA checkpoint did not advance")
     return 0
 
 

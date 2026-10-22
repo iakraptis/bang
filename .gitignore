@@ -7,3 +7,4 @@ web-sessions/
 web/dist-static/
 .cloudflare.env
 .wrangler/
+.venv/

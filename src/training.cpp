@@ -3,6 +3,7 @@
 #ifdef BANG_ENABLE_TORCH
 
 #include <algorithm>
+#include <optional>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -18,12 +19,17 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "bang/checkpoint.hpp"
 #include "bang/game.hpp"
 #include "bang/heuristic.hpp"
 #include "bang/policy_network.hpp"
+#include "bang/static_policy.hpp"
 
 namespace bang {
 namespace {
@@ -81,6 +87,7 @@ struct UpdateStats {
   double auxiliary_loss = 0.0;
   double entropy = 0.0;
   double kl = 0.0;
+  double magnet_kl = 0.0;
   double clip_fraction = 0.0;
   double gradient_norm = 0.0;
   int minibatch_updates = 0;
@@ -800,10 +807,25 @@ Minibatch MakeMinibatch(
   };
 }
 
-std::pair<torch::Tensor, torch::Tensor> SelectedLogProbsAndEntropy(
+Minibatch ToDevice(Minibatch batch, const torch::Device& device) {
+  if (device.is_cpu()) return batch;
+  for (auto* tensor : {
+           &batch.observations, &batch.privileged, &batch.features,
+           &batch.decision_ids, &batch.selected_rows,
+           &batch.old_log_probabilities, &batch.returns, &batch.advantages}) {
+    *tensor = tensor->to(device);
+  }
+  return batch;
+}
+
+struct SegmentedSoftmax {
+  torch::Tensor log_probabilities;
+  torch::Tensor probabilities;
+};
+
+SegmentedSoftmax SegmentedLogSoftmax(
     const torch::Tensor& logits,
     const torch::Tensor& decision_ids,
-    const torch::Tensor& selected_rows,
     long decision_count) {
   // Legal action sets have different sizes. A segmented softmax avoids both
   // padding to the largest action set and thousands of tiny autograd graphs.
@@ -820,22 +842,57 @@ std::pair<torch::Tensor, torch::Tensor> SelectedLogProbsAndEntropy(
       {decision_count}, logits.options()).index_add(
           0, decision_ids, weights);
   const auto row_totals = totals.index_select(0, decision_ids);
-  const auto log_probabilities =
-      shifted - torch::log(row_totals);
-  const auto probabilities = weights / row_totals;
-  const auto entropies = torch::zeros(
-      {decision_count}, logits.options()).index_add(
-          0,
-          decision_ids,
-          -(probabilities * log_probabilities));
   return {
-      log_probabilities.index_select(0, selected_rows),
-      entropies,
+      .log_probabilities = shifted - torch::log(row_totals),
+      .probabilities = weights / row_totals,
   };
 }
 
+// Log-probability of each legal row under uniform play over its decision.
+torch::Tensor UniformLogProbabilities(
+    const torch::Tensor& decision_ids,
+    long decision_count,
+    const torch::TensorOptions& options) {
+  const auto counts = torch::zeros({decision_count}, options).index_add(
+      0, decision_ids, torch::ones({decision_ids.size(0)}, options));
+  return -torch::log(counts).index_select(0, decision_ids);
+}
+
+struct PolicyTerms {
+  torch::Tensor selected_log_probabilities;
+  torch::Tensor entropies;
+  torch::Tensor magnet_kl;  // Per decision; undefined without a magnet.
+};
+
+PolicyTerms ComputePolicyTerms(
+    const torch::Tensor& logits,
+    const torch::Tensor& decision_ids,
+    const torch::Tensor& selected_rows,
+    long decision_count,
+    const torch::Tensor& magnet_log_probabilities) {
+  const auto [log_probabilities, probabilities] =
+      SegmentedLogSoftmax(logits, decision_ids, decision_count);
+  const auto segment_sum = [&](const torch::Tensor& values) {
+    return torch::zeros({decision_count}, logits.options())
+        .index_add(0, decision_ids, values);
+  };
+  PolicyTerms terms{
+      .selected_log_probabilities =
+          log_probabilities.index_select(0, selected_rows),
+      .entropies = segment_sum(-(probabilities * log_probabilities)),
+      .magnet_kl = {},
+  };
+  if (magnet_log_probabilities.defined()) {
+    terms.magnet_kl = segment_sum(
+        probabilities * (log_probabilities - magnet_log_probabilities));
+  }
+  return terms;
+}
+
+// `magnet` is null while the MMD magnet is still uniform play.
 UpdateStats UpdateNetwork(
     BangActorCritic& network,
+    BangActorCritic* magnet,
     torch::optim::Adam& optimizer,
     const std::vector<Transition>& transitions,
     const TrainingConfig& config,
@@ -849,6 +906,7 @@ UpdateStats UpdateNetwork(
       static_cast<int>(
           (indexes.size() + config.minibatches - 1) /
           config.minibatches));
+  const torch::Device device = network->parameters().front().device();
   UpdateStats stats;
   network->train();
   for (int epoch = 0; epoch < config.update_epochs; ++epoch) {
@@ -862,18 +920,40 @@ UpdateStats UpdateNetwork(
           static_cast<int>(indexes.size()));
       const std::vector<int> selected_indexes(
           indexes.begin() + start, indexes.begin() + end);
-      const auto batch = MakeMinibatch(transitions, selected_indexes);
+      const auto batch =
+          ToDevice(MakeMinibatch(transitions, selected_indexes), device);
       const auto output = network->Forward(
           batch.observations,
           batch.features,
           batch.decision_ids,
           batch.privileged);
-      const auto [new_log_probabilities, entropies] =
-          SelectedLogProbsAndEntropy(
-              output.logits,
-              batch.decision_ids,
-              batch.selected_rows,
-              batch.observations.size(0));
+      const long decision_count =
+          static_cast<long>(batch.observations.size(0));
+      torch::Tensor magnet_log_probabilities;
+      if (config.mmd_alpha > 0.0) {
+        torch::NoGradGuard no_grad;
+        magnet_log_probabilities =
+            magnet == nullptr
+                ? UniformLogProbabilities(
+                      batch.decision_ids, decision_count,
+                      output.logits.options())
+                : SegmentedLogSoftmax(
+                      (*magnet)->Forward(
+                          batch.observations,
+                          batch.features,
+                          batch.decision_ids,
+                          batch.privileged).logits,
+                      batch.decision_ids,
+                      decision_count).log_probabilities;
+      }
+      const auto terms = ComputePolicyTerms(
+          output.logits,
+          batch.decision_ids,
+          batch.selected_rows,
+          decision_count,
+          magnet_log_probabilities);
+      const auto& new_log_probabilities = terms.selected_log_probabilities;
+      const auto& entropies = terms.entropies;
       const auto log_ratio =
           new_log_probabilities - batch.old_log_probabilities;
       const auto ratio = torch::exp(log_ratio);
@@ -890,11 +970,16 @@ UpdateStats UpdateNetwork(
       const auto auxiliary_loss =
           torch::mse_loss(output.auxiliary_value, batch.returns);
       const auto entropy = entropies.mean();
-      const auto loss =
+      auto loss =
           policy_loss +
           config.value_loss_coef * value_loss +
           config.auxiliary_value_loss_coef * auxiliary_loss -
           config.entropy_coef * entropy;
+      if (terms.magnet_kl.defined()) {
+        const auto magnet_kl = terms.magnet_kl.mean();
+        loss = loss + config.mmd_alpha * magnet_kl;
+        stats.magnet_kl += magnet_kl.item<double>();
+      }
       optimizer.zero_grad();
       loss.backward();
       stats.gradient_norm +=
@@ -932,6 +1017,7 @@ UpdateStats UpdateNetwork(
     stats.auxiliary_loss /= divisor;
     stats.entropy /= divisor;
     stats.kl /= divisor;
+    stats.magnet_kl /= divisor;
     stats.clip_fraction /= divisor;
     stats.gradient_norm /= divisor;
   }
@@ -1220,7 +1306,12 @@ std::filesystem::path TrainingCommitPath(
   return checkpoint.string() + ".commit.json";
 }
 
-void ValidateTrainingCommit(
+std::filesystem::path MagnetPath(const std::filesystem::path& checkpoint) {
+  return checkpoint.string() + ".magnet.pt";
+}
+
+// Returns the iteration the bundle's MMD magnet was taken at; 0 is uniform.
+int ValidateTrainingCommit(
     const std::filesystem::path& checkpoint,
     int expected_iteration) {
   const auto parsed = ParseJson(ReadTextFile(TrainingCommitPath(checkpoint)));
@@ -1242,24 +1333,45 @@ void ValidateTrainingCommit(
     throw std::runtime_error(
         "training checkpoint bundle was not fully committed");
   }
+  const auto magnet = object->find("magnetIteration");
+  const auto* magnet_iteration =
+      magnet == object->end()
+          ? nullptr
+          : std::get_if<double>(&magnet->second.storage());
+  return magnet_iteration == nullptr ? 0 : static_cast<int>(*magnet_iteration);
 }
 
+// `changed_magnet` is written only when the magnet moved this iteration; the
+// file otherwise still holds the snapshot named by `magnet_iteration`.
 void CommitTrainingCheckpoint(
     const std::filesystem::path& checkpoint,
     BangActorCritic& network,
     torch::optim::Adam& optimizer,
-    const CheckpointMetadata& metadata) {
+    const CheckpointMetadata& metadata,
+    BangActorCritic* changed_magnet,
+    int magnet_iteration) {
   const auto commit = TrainingCommitPath(checkpoint);
   std::error_code ignored;
   std::filesystem::remove(commit, ignored);
   SavePolicyCheckpoint(checkpoint, network, metadata);
   SaveOptimizerCheckpoint(
       checkpoint.string() + ".optimizer.pt", optimizer);
+  const auto magnet_path = MagnetPath(checkpoint);
+  if (magnet_iteration == 0) {
+    std::filesystem::remove(magnet_path, ignored);
+  } else if (changed_magnet != nullptr) {
+    torch::serialize::OutputArchive archive;
+    (*changed_magnet)->save(archive);
+    const auto temporary = magnet_path.string() + ".tmp";
+    archive.save_to(temporary);
+    std::filesystem::rename(temporary, magnet_path);
+  }
   WriteTextFile(
       commit,
       JsonValue(JsonValue::Object{
           {"schemaVersion", 1},
           {"iteration", metadata.iteration},
+          {"magnetIteration", magnet_iteration},
       }).Dump() + "\n");
 }
 
@@ -1276,9 +1388,27 @@ struct EvalMatch {
         rng(seed ^ 0xd1b54a32d192ed03ULL) {}
 };
 
+// Greedy choice of an exported browser policy, matching how checkpoint
+// opponents are played during evaluation.
+int SelectStaticPolicyAction(
+    const StaticPolicyNetwork& policy,
+    const GameState& state,
+    const std::vector<int>& legal) {
+  std::vector<ActionFeature> features;
+  features.reserve(legal.size());
+  for (const int action : legal) features.push_back(EncodeAction(action));
+  const std::vector<float> logits = StaticPolicyLogits(
+      policy, state.TrainingObservationTensor(state.CurrentPlayer()), features);
+  const auto best = std::max_element(logits.begin(), logits.end());
+  return legal[static_cast<std::size_t>(best - logits.begin())];
+}
+
+// The opponent is a checkpoint, an exported static policy, or (both null)
+// the tactical heuristic.
 EvaluationResult Evaluate(
     BangActorCritic& candidate,
     BangActorCritic* opponent,
+    const StaticPolicyNetwork* static_opponent,
     int pairs,
     int seed,
     int max_game_steps) {
@@ -1312,7 +1442,9 @@ EvaluationResult Evaluate(
           match.state.CurrentPlayer() == match.candidate_seat;
       if (!candidate_turn && opponent == nullptr) {
         match.state.ApplyAction(
-            ChooseHeuristicAction(match.state, match.rng));
+            static_opponent != nullptr
+                ? SelectStaticPolicyAction(*static_opponent, match.state, legal)
+                : ChooseHeuristicAction(match.state, match.rng));
         ++match.steps;
         continue;
       }
@@ -1887,6 +2019,33 @@ JsonValue EvaluationResult::ToJson() const {
   };
 }
 
+torch::Device ResolveTrainingDevice(const std::string& name) {
+  const torch::Device device(name);
+  if (!device.is_cpu() && !device.is_cuda()) {
+    throw std::invalid_argument("--device must be cpu, cuda, or cuda:N");
+  }
+  if (device.is_cuda() && !torch::cuda::is_available()) {
+    throw std::runtime_error(
+        "--device " + name + " requested, but this LibTorch build sees no "
+        "CUDA device");
+  }
+  return device;
+}
+
+// Parameters keep their identity (the optimizer holds them), so values are
+// copied in place rather than the modules being reassigned.
+void CopyModuleState(BangActorCritic& source, BangActorCritic& destination) {
+  torch::NoGradGuard no_grad;
+  const auto source_parameters = source->named_parameters(true);
+  for (auto& item : destination->named_parameters(true)) {
+    item.value().copy_(source_parameters[item.key()]);
+  }
+  const auto source_buffers = source->named_buffers(true);
+  for (auto& item : destination->named_buffers(true)) {
+    item.value().copy_(source_buffers[item.key()]);
+  }
+}
+
 int RunTraining(const TrainingConfig& config) {
   if (config.iterations <= 0 || config.batch_games <= 0 ||
       config.update_epochs <= 0 || config.minibatches <= 0 ||
@@ -1918,29 +2077,63 @@ int RunTraining(const TrainingConfig& config) {
   std::signal(SIGINT, StopHandler);
   std::signal(SIGTERM, StopHandler);
   std::filesystem::create_directories(config.checkpoint_dir);
+  if (config.mmd_alpha < 0.0 || config.magnet_interval < 0) {
+    throw std::invalid_argument(
+        "--mmd-alpha and --magnet-interval must be non-negative");
+  }
+  const torch::Device device = ResolveTrainingDevice(config.device);
+  // `network` stays on the CPU for batched rollout inference and checkpoints.
+  // On an accelerator, `learner` is a device-resident twin that owns the
+  // optimizer and is copied back after every update; on the CPU they are one
+  // module.
   BangActorCritic network(ArchitectureForModelType(config.model_type));
   network->eval();
+  BangActorCritic learner = network;
+  if (!device.is_cpu()) {
+    learner = BangActorCritic(ArchitectureForModelType(config.model_type));
+    learner->to(device);
+    learner->eval();
+    CopyModuleState(network, learner);
+  }
   torch::optim::Adam optimizer(
-      network->parameters(),
+      learner->parameters(),
       torch::optim::AdamOptions(config.learning_rate));
+  // MMD magnet: null (uniform play) until its first move, then a frozen
+  // snapshot of the learner on the learner's device.
+  const bool mmd = config.mmd_alpha > 0.0;
+  BangActorCritic magnet{nullptr};
+  int magnet_iteration = 0;
   int first_iteration = 1;
   std::int64_t environment_steps = 0;
   std::int64_t learner_decisions = 0;
   double elapsed_before = 0.0;
   if (!config.resume_from.empty()) {
     const auto metadata = LoadCheckpointMetadata(config.resume_from);
-    ValidateTrainingCommit(config.resume_from, metadata.iteration);
+    magnet_iteration =
+        ValidateTrainingCommit(config.resume_from, metadata.iteration);
     if (metadata.model_type != config.model_type) {
       throw std::runtime_error(
           "resume checkpoint holds a " + metadata.model_type +
           " policy but training was configured for " + config.model_type);
     }
     LoadPolicyCheckpoint(config.resume_from, network);
+    if (!device.is_cpu()) CopyModuleState(network, learner);
     if (!LoadOptimizerCheckpointIfPresent(
             config.resume_from.string() + ".optimizer.pt",
-            optimizer)) {
+            optimizer,
+            device)) {
       throw std::runtime_error(
           "resume checkpoint is missing optimizer state");
+    }
+    if (mmd && magnet_iteration > 0) {
+      magnet = BangActorCritic(ArchitectureForModelType(config.model_type));
+      magnet->to(device);
+      magnet->eval();
+      torch::serialize::InputArchive archive;
+      archive.load_from(MagnetPath(config.resume_from).string(), device);
+      magnet->load(archive);
+    } else if (!mmd) {
+      magnet_iteration = 0;
     }
     first_iteration = metadata.iteration + 1;
     environment_steps = metadata.environment_steps;
@@ -1952,7 +2145,11 @@ int RunTraining(const TrainingConfig& config) {
               << first_iteration - 1 << '\n';
     return 0;
   }
+#ifdef _WIN32
+  const bool color = ::_isatty(::_fileno(stdout)) != 0;
+#else
   const bool color = ::isatty(STDOUT_FILENO) != 0;
+#endif
   const char* cyan = color ? "\033[1;36m" : "";
   const char* green = color ? "\033[1;32m" : "";
   const char* yellow = color ? "\033[1;33m" : "";
@@ -1962,7 +2159,8 @@ int RunTraining(const TrainingConfig& config) {
             << CountParameters(*network)
             << " params  ·  " << config.batch_games
             << " games/update  ·  " << config.torch_threads
-            << " CPU threads\n" << std::flush;
+            << " CPU threads  ·  learner " << device.str()
+            << '\n' << std::flush;
   std::deque<double> recent_win_rates =
       ReadRecentWinRates(config.metrics_path, 20);
   std::vector<RolloutResult::OpponentStats> chunk_opponents;
@@ -1975,7 +2173,21 @@ int RunTraining(const TrainingConfig& config) {
     auto rollout = CollectRollouts(network, config, iteration);
     const auto rollout_end = std::chrono::steady_clock::now();
     auto update = UpdateNetwork(
-        network, optimizer, rollout.transitions, config, iteration);
+        learner, magnet ? &magnet : nullptr, optimizer,
+        rollout.transitions, config, iteration);
+    if (!device.is_cpu()) CopyModuleState(learner, network);
+    bool magnet_moved = false;
+    if (mmd && config.magnet_interval > 0 &&
+        iteration % config.magnet_interval == 0) {
+      if (!magnet) {
+        magnet = BangActorCritic(ArchitectureForModelType(config.model_type));
+        magnet->to(device);
+        magnet->eval();
+      }
+      CopyModuleState(learner, magnet);
+      magnet_iteration = iteration;
+      magnet_moved = true;
+    }
     const auto iteration_end = std::chrono::steady_clock::now();
     const double rollout_seconds =
         std::chrono::duration<double>(rollout_end - rollout_start).count();
@@ -1998,7 +2210,9 @@ int RunTraining(const TrainingConfig& config) {
         learner_decisions,
         elapsed);
     const auto latest = config.checkpoint_dir / "latest.pt";
-    CommitTrainingCheckpoint(latest, network, optimizer, metadata);
+    CommitTrainingCheckpoint(
+        latest, network, optimizer, metadata,
+        magnet_moved ? &magnet : nullptr, magnet_iteration);
     const double learner_win_rate =
         static_cast<double>(rollout.learner_wins) / config.batch_games;
     const double law_win_rate =
@@ -2068,6 +2282,8 @@ int RunTraining(const TrainingConfig& config) {
         {"topActionProbability", top_action_probability},
         {"gradientNorm", update.gradient_norm},
         {"approximateKl", update.kl},
+        {"magnetKl", update.magnet_kl},
+        {"magnetIteration", magnet_iteration},
         {"clipFraction", update.clip_fraction},
         {"updateEpochs", update.epochs},
         {"klEarlyStop", update.early_stopped},
@@ -2150,7 +2366,16 @@ int RunTraining(const TrainingConfig& config) {
           << critic_explained_variance
           << " · grad " << update.gradient_norm
           << " · KL " << update.kl << '/' << config.target_kl
-          << " · clip " << Percent(update.clip_fraction)
+          << " · clip " << Percent(update.clip_fraction);
+      if (mmd) {
+        std::cout << " · KL→magnet " << std::setprecision(4)
+                  << update.magnet_kl << " ("
+                  << (magnet_iteration == 0
+                          ? std::string("uniform")
+                          : "iter " + std::to_string(magnet_iteration))
+                  << ')';
+      }
+      std::cout
           << '\n' << std::flush;
     }
     if (rollout.truncated > 0) {
@@ -2175,7 +2400,8 @@ int RunTraining(const TrainingConfig& config) {
                 << Percent(learner_side_gap)
                 << reset << '\n' << std::flush;
     }
-    if (stop_requested.load()) {
+    if (stop_requested.load() ||
+        (!config.stop_file.empty() && std::filesystem::exists(config.stop_file))) {
       std::cout << yellow
                 << "stop requested; iteration bundle committed at "
                 << latest << reset << '\n' << std::flush;
@@ -2200,13 +2426,23 @@ EvaluationResult RunPairedEvaluation(
   candidate->eval();
   BangActorCritic opponent{nullptr};
   BangActorCritic* opponent_pointer = nullptr;
-  if (!opponent_path.empty()) {
+  std::optional<StaticPolicyNetwork> static_opponent;
+  // A .json opponent is an exported browser policy (tools/export_static_policy.py),
+  // so a committed policy/static-policy.json can serve as a fixed reference.
+  if (opponent_path.extension() == ".json") {
+    static_opponent = LoadStaticPolicyFile(opponent_path);
+  } else if (!opponent_path.empty()) {
     opponent = LoadPolicyFromCheckpoint(opponent_path);
     opponent->eval();
     opponent_pointer = &opponent;
   }
   return Evaluate(
-      candidate, opponent_pointer, pairs, seed, max_game_steps);
+      candidate,
+      opponent_pointer,
+      static_opponent ? &*static_opponent : nullptr,
+      pairs,
+      seed,
+      max_game_steps);
 }
 
 JsonValue RunSelfPlayEvaluation(
@@ -2229,6 +2465,83 @@ JsonValue RunSelfPlayEvaluation(
   return SelfPlayStatsJson(
       EvaluateSelfPlay(network, games, seed, max_game_steps),
       seed);
+}
+
+JsonValue RunStaticPolicyParity(
+    const std::filesystem::path& checkpoint,
+    const std::filesystem::path& static_policy,
+    int decisions,
+    int seed) {
+  if (decisions <= 0) {
+    throw std::invalid_argument("parity decisions must be positive");
+  }
+  torch::set_num_threads(1);
+  BangActorCritic network = LoadPolicyFromCheckpoint(checkpoint);
+  network->eval();
+  const StaticPolicyNetwork exported = LoadStaticPolicyFile(static_policy);
+  torch::NoGradGuard no_grad;
+  FastRng rng(static_cast<std::uint64_t>(seed) ^ 0x9e3779b97f4a7c15ULL);
+  int game = 0;
+  GameState state(GameConfig{
+      .seed = static_cast<std::uint64_t>(seed), .characters_per_side = 4});
+  double max_abs_difference = 0.0;
+  int argmax_disagreements = 0;
+  // Largest gap between the top two torch logits at a disagreement: a real
+  // export bug disagrees on clear choices, float rounding only on near-ties.
+  double widest_disagreement_gap = 0.0;
+  int compared = 0;
+  while (compared < decisions) {
+    if (state.IsTerminal()) {
+      state = GameState(GameConfig{
+          .seed = static_cast<std::uint64_t>(seed + ++game),
+          .characters_per_side = 4});
+    }
+    const auto legal = state.LegalActions();
+    if (legal.size() > 1) {
+      std::vector<ActionFeature> features;
+      std::vector<float> flat;
+      for (const int action : legal) {
+        features.push_back(EncodeAction(action));
+        flat.insert(flat.end(), features.back().values.begin(),
+                    features.back().values.end());
+      }
+      auto observation = state.TrainingObservationTensor(state.CurrentPlayer());
+      std::vector<std::int64_t> ids(legal.size(), 0);
+      const auto torch_logits = network->Forward(
+          torch::from_blob(observation.data(), {1, kTrainingObservationSize},
+                           torch::kFloat32).clone(),
+          torch::from_blob(flat.data(),
+                           {static_cast<long>(legal.size()), kActionFeatureSize},
+                           torch::kFloat32).clone(),
+          torch::from_blob(ids.data(), {static_cast<long>(ids.size())},
+                           torch::kInt64).clone()).logits.contiguous();
+      const float* reference = torch_logits.data_ptr<float>();
+      const auto candidate = StaticPolicyLogits(exported, observation, features);
+      std::size_t torch_best = 0;
+      std::size_t static_best = 0;
+      for (std::size_t row = 0; row < legal.size(); ++row) {
+        max_abs_difference = std::max(
+            max_abs_difference,
+            static_cast<double>(std::abs(reference[row] - candidate[row])));
+        if (reference[row] > reference[torch_best]) torch_best = row;
+        if (candidate[row] > candidate[static_best]) static_best = row;
+      }
+      if (torch_best != static_best) {
+        ++argmax_disagreements;
+        widest_disagreement_gap = std::max(
+            widest_disagreement_gap,
+            static_cast<double>(reference[torch_best] - reference[static_best]));
+      }
+      ++compared;
+    }
+    state.ApplyAction(legal[rng.USize(legal.size())]);
+  }
+  return JsonValue::Object{
+      {"decisions", compared},
+      {"maxAbsLogitDifference", max_abs_difference},
+      {"argmaxDisagreements", argmax_disagreements},
+      {"widestDisagreementGap", widest_disagreement_gap},
+  };
 }
 
 JsonValue RunCheckpointCanary(

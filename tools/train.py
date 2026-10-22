@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import json
 import math
@@ -18,6 +17,24 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+else:
+    import fcntl
+
+
+def prevent_system_sleep() -> None:
+    """Keep Windows from sleeping while this campaign process lives.
+
+    An idle-timer sleep suspends training mid-iteration and still spends the
+    wall-clock budget. The request ends with the process; the display may sleep.
+    """
+    if os.name != "nt":
+        return
+    es_continuous, es_system_required = 0x80000000, 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | es_system_required)
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +51,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--update-epochs", type=int, default=4)
     parser.add_argument("--minibatches", type=int, default=8)
     parser.add_argument("--torch-threads", type=int, default=min(6, os.cpu_count() or 1))
+    # Where PPO updates run. Rollouts and evaluations stay on the CPU. Not part
+    # of settings(): it changes speed, not the experiment, so a run may resume
+    # on different hardware.
+    parser.add_argument("--device", default="cpu", help="cpu, cuda, or cuda:N")
     # v3 is ten times v2's width and moves the policy much further per gradient
     # step: at matched iteration counts the measured approximate KL was 0.0020 for
     # v2 at 3e-4 against 0.0042 for v3 at 2e-4. That keeps v3 pressed against this
@@ -48,6 +69,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--target-kl", type=float, default=0.015)
+    # Magnetic Mirror Descent: adds alpha * KL(policy || magnet) to the PPO loss.
+    # The magnet starts as uniform play and moves to the current policy every
+    # --magnet-interval iterations (0 keeps it uniform). Alpha 0 is plain PPO.
+    parser.add_argument("--mmd-alpha", type=float, default=0.0)
+    parser.add_argument("--magnet-interval", type=int, default=0)
     parser.add_argument("--scouting-pairs", type=int, default=64)
     parser.add_argument("--final-pairs", type=int, default=512)
     parser.add_argument("--self-eval-games", type=int, default=2048)
@@ -100,6 +126,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--final-reserve-hours must be in [0, --hours)")
     if args.max_chunks < 0 or args.stop_after_chunks < -1:
         raise SystemExit("chunk limits must be non-negative")
+    if args.mmd_alpha < 0 or args.magnet_interval < 0:
+        raise SystemExit("--mmd-alpha and --magnet-interval must be non-negative")
+    if not re.fullmatch(r"cpu|cuda(:\d+)?", args.device):
+        raise SystemExit("--device must be cpu, cuda, or cuda:N")
     if args.self_eval_games < 0:
         raise SystemExit("--self-eval-games must be non-negative")
 
@@ -218,7 +248,8 @@ class Campaign:
             if args.run_dir.is_absolute()
             else (self.repo / args.run_dir).resolve()
         )
-        self.binary = self.repo / "build-train" / "bang_duel"
+        executable = "bang_duel.exe" if os.name == "nt" else "bang_duel"
+        self.binary = self.repo / "build-train" / executable
         self.state_path = self.run_dir / "state.json"
         self.console = Console(self.run_dir / "progress.log")
         self.state: dict[str, Any] = {}
@@ -239,6 +270,11 @@ class Campaign:
             "entropyCoef": self.args.entropy_coef,
             "targetKl": self.args.target_kl,
             "seed": self.args.seed,
+            # Recorded only when enabled, so runs from before MMD still resume.
+            **({
+                "mmdAlpha": self.args.mmd_alpha,
+                "magnetInterval": self.args.magnet_interval,
+            } if self.args.mmd_alpha > 0 else {}),
         }
 
     # Optimizer knobs a resume may simply change: they steer the next update
@@ -288,9 +324,18 @@ class Campaign:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.lock = (self.run_dir / "campaign.lock").open("a+")
         try:
-            fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
+            if os.name == "nt":
+                # Byte-range lock on the first byte; released when the process exits.
+                self.lock.seek(0)
+                msvcrt.locking(self.lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
             raise SystemExit(f"another campaign owns {self.run_dir}") from error
+
+    @property
+    def stop_file(self) -> Path:
+        return self.run_dir / "stop.request"
 
     def save_state(self) -> None:
         self.state["updatedAt"] = utc_now()
@@ -302,7 +347,10 @@ class Campaign:
                 return
             self.stop_requested = True
             self.console.warn("stop requested; finishing and checkpointing the PPO iteration")
-            if self.active_process is not None:
+            self.stop_file.touch()
+            # Windows cannot send SIGINT to one child; a console Ctrl-C reaches
+            # it directly, and the stop file covers every other stop.
+            if self.active_process is not None and os.name != "nt":
                 self.active_process.send_signal(signal.SIGINT)
 
         signal.signal(signal.SIGINT, stop)
@@ -381,6 +429,7 @@ class Campaign:
         self.console.line("  format     standard four-character duel · both sides")
         self.console.line(
             f"  hardware   {self.args.torch_threads} CPU threads · batched native inference"
+            f" · learner {self.args.device}"
         )
         self.console.line(
             f"  model      {self.args.model} · "
@@ -390,6 +439,14 @@ class Campaign:
         self.console.line(
             f"  PPO        {self.args.batch_games} games × {self.args.chunk_iterations} updates/chunk"
         )
+        if self.args.mmd_alpha > 0:
+            magnet = (
+                f"moves every {self.args.magnet_interval} updates"
+                if self.args.magnet_interval > 0 else "stays uniform"
+            )
+            self.console.line(
+                f"  MMD        alpha {self.args.mmd_alpha} · magnet starts uniform, {magnet}"
+            )
         self.console.line(
             f"  budget     {format_duration(self.args.hours * 3600)} total · "
             f"{format_duration(self.args.final_reserve_hours * 3600)} final selection"
@@ -501,6 +558,10 @@ class Campaign:
             "--target-kl", str(self.args.target_kl),
             "--seed", str(self.args.seed),
             "--checkpoint-dir", str(main),
+            "--stop-file", str(self.stop_file),
+            "--device", self.args.device,
+            "--mmd-alpha", str(self.args.mmd_alpha),
+            "--magnet-interval", str(self.args.magnet_interval),
         ]
         if resume is not None:
             command.extend(["--resume", str(resume)])
@@ -997,6 +1058,9 @@ class Campaign:
             }, indent=2))
             return 0
         self.acquire_lock()
+        # A request left by the previous stop must not end this resume at once.
+        self.stop_file.unlink(missing_ok=True)
+        prevent_system_sleep()
         self.install_signals()
         self.initialize()
         if self.state["phase"] == "complete":

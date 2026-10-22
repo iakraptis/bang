@@ -45,6 +45,18 @@ struct TrainingConfig {
   std::filesystem::path metrics_path =
       "runs/bang_league/main/metrics.jsonl";
   std::filesystem::path resume_from;
+  // Checked after each committed iteration. Windows cannot deliver SIGINT to
+  // one child process, so the controller requests a stop by creating it.
+  std::filesystem::path stop_file;
+  // Where PPO updates run ("cpu", "cuda", "cuda:N"). Rollouts, opponents
+  // and checkpoints always stay on the CPU.
+  std::string device = "cpu";
+  // Magnetic Mirror Descent: alpha * KL(policy || magnet) joins the PPO loss.
+  // The magnet starts as uniform play over legal actions and, when
+  // magnet_interval > 0, moves to the learner every that many iterations.
+  // alpha = 0 is plain PPO.
+  double mmd_alpha = 0.0;
+  int magnet_interval = 0;
   std::vector<TrainingOpponentSpec> opponents;
   bool compact_logging = false;
 };
@@ -77,6 +89,13 @@ JsonValue RunSelfPlayEvaluation(
     int torch_threads = 6,
     int max_game_steps = 5000);
 JsonValue RunCheckpointCanary(const std::filesystem::path& checkpoint);
+// Compares a checkpoint's legal-action logits with its static (browser) export
+// across `decisions` positions from randomly played games.
+JsonValue RunStaticPolicyParity(
+    const std::filesystem::path& checkpoint,
+    const std::filesystem::path& static_policy,
+    int decisions,
+    int seed);
 JsonValue RunCheckpointInference(
     const std::filesystem::path& checkpoint,
     int games,

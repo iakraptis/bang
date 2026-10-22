@@ -65,7 +65,8 @@ void SaveOptimizerCheckpoint(
     torch::optim::Optimizer& optimizer);
 bool LoadOptimizerCheckpointIfPresent(
     const std::filesystem::path& path,
-    torch::optim::Optimizer& optimizer);
+    torch::optim::Optimizer& optimizer,
+    torch::Device device = torch::kCPU);
 int SelectPolicyAction(
     BangActorCritic& network,
     const GameState& state,

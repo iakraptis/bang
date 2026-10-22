@@ -225,10 +225,12 @@ void SaveOptimizerCheckpoint(
 
 bool LoadOptimizerCheckpointIfPresent(
     const std::filesystem::path& path,
-    torch::optim::Optimizer& optimizer) {
+    torch::optim::Optimizer& optimizer,
+    torch::Device device) {
   if (!std::filesystem::is_regular_file(path)) return false;
   torch::serialize::InputArchive archive;
-  archive.load_from(path.string());
+  // Adam moments must sit beside the parameters, whichever device saved them.
+  archive.load_from(path.string(), device);
   optimizer.load(archive);
   return true;
 }

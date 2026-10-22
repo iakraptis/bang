@@ -37,7 +37,52 @@ that exposes `torch.utils.cmake_prefix_path`.
 ```
 
 The wrapper always creates an optimized build and runs the test suite before
-training. To customize the production budget:
+training.
+
+### Windows
+
+`train.ps1` is the Windows wrapper and accepts the same options. It needs the
+Visual Studio 2022 C++ build tools (MSVC, plus the bundled CMake and Ninja) and
+uses `.venv\Scripts\python.exe` when that virtual environment exists:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install torch numpy --index-url https://download.pytorch.org/whl/cu124
+.\train.ps1 --rehearsal --run-dir runs/rehearsal
+```
+
+The script loads the MSVC environment itself, so a plain PowerShell works.
+Differences from the Linux path:
+
+- Torch's DLLs (~4 GB with CUDA) are found through `PATH` rather than copied
+  next to the binary. To run `build-train\bang_duel.exe` by hand, first prepend
+  `.venv\Lib\site-packages\torch\lib` to `PATH`.
+- `PYTHONUTF8=1` is set because native telemetry is UTF-8.
+- Ctrl-C reaches the native trainer through the console. The controller also
+  creates `stop.request` in the run directory, which the trainer polls after
+  each committed iteration (`--stop-file`); POSIX additionally forwards SIGINT.
+- `OPENBLAS_NUM_THREADS` does not apply: Windows Torch uses MKL.
+
+### GPU learner
+
+`--device cuda` (or `cuda:N`) runs the PPO update on the GPU. Rollouts,
+opponents, and evaluations stay on the CPU: the learner is a GPU twin of the
+CPU rollout network, copied back after every update, and checkpoints are always
+written from the CPU copy, so they load anywhere. A run can resume on a
+different device; the flag is deliberately not part of the pinned settings.
+
+Measured on an RTX 4060 Ti with 256 games, four epochs, and eight minibatches:
+
+| Model | CPU learn | CUDA learn |
+|---|---:|---:|
+| `v2` | ~1.1 s | ~0.65 s |
+| `v3` | ~5.3 s | ~0.8 s |
+
+The gain grows with model size; `v2` is small enough that transfer overhead
+eats much of it. GPU reductions are not bit-identical to CPU ones, so a CUDA
+run reproduces a CPU run only approximately.
+
+To customize the production budget:
 
 ```sh
 ./train.sh \
@@ -264,6 +309,14 @@ Compare two checkpoints with 512 common-seed pairs:
 ./build-train/bang_duel evaluate CANDIDATE.pt OPPONENT.pt 512 900001 6
 ```
 
+An opponent ending in `.json` is an exported browser policy, played greedily.
+This makes the committed `policy/static-policy.json` a fixed reference that
+needs no training run on the machine:
+
+```sh
+./build-train/bang_duel evaluate CANDIDATE.pt policy/static-policy.json 1024 900001 6
+```
+
 Run a checkpoint load/tensor canary:
 
 ```sh
@@ -282,6 +335,31 @@ Play against the selected policy:
 Browser play is stochastic by default. Add `--greedy` for deterministic
 maximum-logit choices. The server reports whether it actually loaded a trained
 policy; `--require-trained` prevents an accidental heuristic fallback.
+
+## Magnetic Mirror Descent
+
+`--mmd-alpha A` adds `A · KL(policy ‖ magnet)` to the PPO loss, summed over
+each decision's legal actions. PPO's clipping and target-KL stop already supply
+MMD's other half, staying near the previous policy. The magnet starts as
+uniform play over legal actions; with `--magnet-interval N > 0` it moves to a
+frozen copy of the learner every `N` updates. A uniform magnet alone is an
+entropy bonus of strength `A`; the moving magnet is what lets the policy
+approach an equilibrium rather than a fixed amount of randomness.
+
+```powershell
+.\train.ps1 --run-dir runs/mmd_a01 --device cuda --mmd-alpha 0.1 --magnet-interval 50
+```
+
+- `--mmd-alpha 0` (the default) is bit-identical to plain PPO.
+- The magnet is part of the training bundle (`latest.pt.magnet.pt`, with its
+  iteration in the commit marker), so chunk restarts and resumes continue
+  exactly where an uninterrupted run would be.
+- Both settings are pinned in the manifest when MMD is on; switching MMD on or
+  off mid-campaign is rejected.
+- The HEALTH line and `metrics.jsonl` report the KL to the magnet and the
+  iteration it was taken at.
+
+The league opponent mix is unchanged; MMD only changes the learner's objective.
 
 ## Current limitations and next experiments
 

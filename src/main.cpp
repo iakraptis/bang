@@ -143,10 +143,14 @@ std::vector<bang::TrainingOpponentSpec> OpponentOptions(
     } else if (parts[0] == "heuristic") {
       spec.kind = bang::TrainingOpponentKind::kHeuristic;
       spec.probability = std::stod(parts[2]);
-    } else if (parts[0] == "checkpoint" && parts.size() == 4) {
+    } else if (parts[0] == "checkpoint" && parts.size() >= 4) {
+      // The path may itself contain ':' (a Windows drive letter), so it spans
+      // everything between the id and the final probability field.
+      const std::size_t path_start = parts[0].size() + parts[1].size() + 2;
+      const std::size_t path_end = text.rfind(':');
       spec.kind = bang::TrainingOpponentKind::kCheckpoint;
-      spec.checkpoint = parts[2];
-      spec.probability = std::stod(parts[3]);
+      spec.checkpoint = text.substr(path_start, path_end - path_start);
+      spec.probability = std::stod(parts.back());
     } else {
       throw std::invalid_argument("unsupported --opponent specification");
     }
@@ -157,7 +161,7 @@ std::vector<bang::TrainingOpponentSpec> OpponentOptions(
 
 void ValidateTrainingArguments(
     const std::vector<std::string>& arguments) {
-  const std::array<std::string_view, 13> options{
+  const std::array<std::string_view, 17> options{
       "--iterations",
       "--model",
       "--batch-games",
@@ -171,6 +175,10 @@ void ValidateTrainingArguments(
       "--checkpoint-dir",
       "--metrics",
       "--resume",
+      "--stop-file",
+      "--device",
+      "--mmd-alpha",
+      "--magnet-interval",
   };
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const std::string_view argument = arguments[index];
@@ -248,6 +256,16 @@ int main(int argc, char** argv) {
       if (const auto value = Option(arguments, "--resume")) {
         config.resume_from = *value;
       }
+      if (const auto value = Option(arguments, "--stop-file")) {
+        config.stop_file = *value;
+      }
+      if (const auto value = Option(arguments, "--device")) {
+        config.device = *value;
+      }
+      config.mmd_alpha =
+          DoubleOption(arguments, "--mmd-alpha", config.mmd_alpha);
+      config.magnet_interval =
+          IntOption(arguments, "--magnet-interval", config.magnet_interval);
       config.opponents = OpponentOptions(arguments);
       return bang::RunTraining(config);
     }
@@ -350,6 +368,20 @@ int main(int argc, char** argv) {
         config.require_trained_policy = true;
       }
       std::cout << bang::RunWebSmokeTest(config).Dump() << '\n';
+      return 0;
+    }
+    if (command == "static-policy-parity") {
+      if (argc < 4) {
+        throw std::invalid_argument(
+            "static-policy-parity requires a checkpoint and a static policy");
+      }
+      std::cout << bang::RunStaticPolicyParity(
+                       argv[2],
+                       argv[3],
+                       argc >= 5 ? std::atoi(argv[4]) : 2000,
+                       argc >= 6 ? std::atoi(argv[5]) : 31337)
+                       .Dump()
+                << '\n';
       return 0;
     }
     if (command == "static-policy-smoke") {
