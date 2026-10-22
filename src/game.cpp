@@ -243,6 +243,34 @@ std::vector<int> GameState::LegalActions() const {
     }
     return result;
   }
+  if (phase_ == Phase::kChooseSwitch) {
+    if (switch_second_player_ >= 0) {
+      result.push_back(kSkipOptionalAction);
+      result.push_back(kAcceptOptionalAction);
+      return result;
+    }
+    if (CanSwapSide(turn_player_)) result.push_back(kChooseOwnSwapAction);
+    if (CanSwapSide(OtherPlayer(turn_player_))) result.push_back(kChooseOpponentSwapAction);
+    return result;
+  }
+  if (phase_ == Phase::kChooseUnionPacific) {
+    // Your deck or the opponent's, one card at a time.
+    result.push_back(kChooseOwnSwapAction);
+    result.push_back(kChooseOpponentSwapAction);
+    return result;
+  }
+  if (phase_ == Phase::kChooseAmbush) {
+    result.push_back(kSkipOptionalAction);
+    for (int player = 0; player < kSideCount; ++player) {
+      if (ambush_stage_ == 0 && player != turn_player_) continue;
+      const auto& side = players_[static_cast<std::size_t>(player)];
+      for (const int instance :
+           side.positions[static_cast<std::size_t>(side.active_position)].equipment) {
+        result.push_back(SelectCardAction(instance));
+      }
+    }
+    return result;
+  }
   if (phase_ == Phase::kChooseShotgun) {
     const auto& own = players_[static_cast<std::size_t>(optional_effect_player_)];
     if (own.positions[0].life > 0 && own.positions[1].life > 0) {
@@ -557,6 +585,20 @@ std::vector<int> GameState::LegalActions() const {
             result.push_back(PlayCardAction(instance, Target::kOpponentRearguard));
           }
         }
+      } else if (card.name == CardName::kSwitch) {
+        if (CanSwapSide(decision_player_) || CanSwapSide(OtherPlayer(decision_player_))) {
+          result.push_back(PlayCardAction(instance, Target::kOwnActive));
+        }
+      } else if (card.name == CardName::kAmbush) {
+        bool any_equipment = false;
+        for (const auto& side : players_) {
+          any_equipment |= !side.positions[static_cast<std::size_t>(side.active_position)]
+                                .equipment.empty();
+        }
+        if (any_equipment) result.push_back(PlayCardAction(instance, Target::kOwnActive));
+      } else if (card.name == CardName::kUnionPacific ||
+                 card.name == CardName::kWhiskey) {
+        result.push_back(PlayCardAction(instance, Target::kOwnActive));
       } else if (card.name == CardName::kGatling ||
                  card.name == CardName::kGeneralStore ||
                  card.name == CardName::kIndians ||
@@ -705,13 +747,23 @@ void GameState::ApplyAction(int action_id) {
       FinishDuelResponse(std::nullopt);
     } else if (phase_ == Phase::kChooseSchoolmarm && action.card_instance == 0) {
       FinishSchoolmarm(std::nullopt);
+    } else if (phase_ == Phase::kChooseSwitch) {
+      FinishSwitchSecond(action.card_instance == 1);
+    } else if (phase_ == Phase::kChooseAmbush && action.card_instance == 0) {
+      FinishAmbushPick(std::nullopt);
     } else {
       throw std::logic_error("optional action does not match pending effect");
     }
     return;
   }
   if (action.kind == ActionKind::kChooseSwap) {
-    FinishShotgunChoice(action.card_instance == 1);
+    if (phase_ == Phase::kChooseSwitch) {
+      FinishSwitchChoice(action.card_instance == 1);
+    } else if (phase_ == Phase::kChooseUnionPacific) {
+      FinishUnionPacificDraw(action.card_instance == 1);
+    } else {
+      FinishShotgunChoice(action.card_instance == 1);
+    }
     return;
   }
   if (action.kind == ActionKind::kChooseCardBack) {
@@ -740,6 +792,8 @@ void GameState::ApplyAction(int action_id) {
       FinishSchoolmarm(action.card_instance);
     } else if (phase_ == Phase::kChooseStealing) {
       FinishStealingEquipment(action.card_instance);
+    } else if (phase_ == Phase::kChooseAmbush) {
+      FinishAmbushPick(action.card_instance);
     } else if (phase_ == Phase::kChooseAbility &&
                pending_ability_ == static_cast<int>(CharacterName::kCattleKatie)) {
       FinishCattleKatie(action.card_instance);
@@ -1163,9 +1217,88 @@ void GameState::ResumeAfterMovement() {
     AdvanceStartTurn();
   } else if (resume_kind == ResumeKind::kPendingEffect) {
     ResumeAfterPendingEffect();
+  } else if (switch_second_player_ >= 0) {
+    ContinueSwitch();  // a Switch's first swap finished resolving
   } else {
     decision_player_ = turn_player_;
     phase_ = Phase::kPlay;
+  }
+}
+
+bool GameState::CanSwapSide(int player) const {
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  return state.positions[0].life > 0 && state.positions[1].life > 0;
+}
+
+void GameState::FinishSwitchChoice(bool opponent) {
+  const int first = opponent ? OtherPlayer(turn_player_) : turn_player_;
+  const int second = OtherPlayer(first);
+  if (!CanSwapSide(first)) throw std::logic_error("Switch side cannot swap");
+  switch_second_player_ = CanSwapSide(second) ? second : -1;
+  // A paused swap (Tom Thorn, Jango) comes back through ResumeAfterMovement.
+  if (!SwapCharacters(first, false)) ContinueSwitch();
+}
+
+void GameState::ContinueSwitch() {
+  if (switch_second_player_ >= 0 && !IsTerminal() && CanSwapSide(switch_second_player_)) {
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseSwitch;
+    return;
+  }
+  switch_second_player_ = -1;
+  if (IsTerminal()) return;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+}
+
+void GameState::FinishSwitchSecond(bool accept) {
+  const int second = switch_second_player_;
+  switch_second_player_ = -1;
+  if (accept && CanSwapSide(second) && SwapCharacters(second, false)) return;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+}
+
+void GameState::FinishUnionPacificDraw(bool opponent) {
+  if (union_pacific_remaining_ <= 0) throw std::logic_error("no Union Pacific draw pending");
+  if (opponent) {
+    const auto card = TakeTopCard(OtherPlayer(turn_player_));
+    if (card) players_[static_cast<std::size_t>(turn_player_)].hand.push_back(*card);
+  } else {
+    DrawOne(turn_player_);
+  }
+  if (--union_pacific_remaining_ > 0) return;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+}
+
+void GameState::FinishAmbushPick(std::optional<int> card_instance) {
+  int owner = -1;
+  int position = -1;
+  if (card_instance) {
+    for (int player = 0; player < kSideCount && owner < 0; ++player) {
+      if (ambush_stage_ == 0 && player != turn_player_) continue;
+      const int active = players_[static_cast<std::size_t>(player)].active_position;
+      const auto& equipment = players_[static_cast<std::size_t>(player)]
+                                  .positions[static_cast<std::size_t>(active)]
+                                  .equipment;
+      if (std::find(equipment.begin(), equipment.end(), *card_instance) != equipment.end()) {
+        owner = player;
+        position = active;
+      }
+    }
+    if (owner < 0) throw std::logic_error("Ambush target is not on an allowed AC");
+    RemoveEquipment(owner, position, *card_instance);
+  }
+  if (ambush_stage_ == 0) {
+    ambush_stage_ = 1;
+    return;
+  }
+  ambush_stage_ = 0;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+  if (owner >= 0 && owner != turn_player_) {
+    BeginWildBillReaction(owner, turn_player_, ResumeKind::kPlay, position);
   }
 }
 
@@ -1327,7 +1460,10 @@ bool GameState::IsSupportedAction(CardName name) const {
          name == CardName::kGeneralStore || name == CardName::kIndians ||
          name == CardName::kKnife || name == CardName::kSchoolmarm ||
          name == CardName::kStealing || name == CardName::kStrongAle ||
-         name == CardName::kWagon || name == CardName::kWater;
+         name == CardName::kWagon || name == CardName::kWater ||
+         // Renegades
+         name == CardName::kAmbush || name == CardName::kSwitch ||
+         name == CardName::kUnionPacific || name == CardName::kWhiskey;
 }
 
 void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
@@ -1790,6 +1926,32 @@ void GameState::ResolveActionEffect(CardName name, Target target) {
     }
     return;
   }
+  if (name == CardName::kSwitch) {
+    switch_second_player_ = -1;
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseSwitch;
+    return;
+  }
+  if (name == CardName::kUnionPacific) {
+    union_pacific_remaining_ = 2;
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseUnionPacific;
+    return;
+  }
+  if (name == CardName::kAmbush) {
+    // Your own AC first (skipped when it has nothing), then any AC.
+    const auto& own = players_[static_cast<std::size_t>(turn_player_)];
+    ambush_stage_ =
+        own.positions[static_cast<std::size_t>(own.active_position)].equipment.empty() ? 1 : 0;
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseAmbush;
+    return;
+  }
+  if (name == CardName::kWhiskey) {
+    const auto& own = players_[static_cast<std::size_t>(turn_player_)];
+    BeginReveal({RevealReason::kWhiskey, turn_player_, own.active_position, -1});
+    return;
+  }
   if (name == CardName::kWater) {
     const bool opponent_target = target == Target::kOpponentActive;
     SwapCharacters(opponent_target ? OtherPlayer(turn_player_) : turn_player_, false);
@@ -2209,7 +2371,8 @@ void GameState::FinishReveal(int selected_index) {
         (reveal.reason == RevealReason::kBarrel && symbol == RevealSymbol::kBarrel) ||
         (reveal.reason == RevealReason::kDynamite && symbol == RevealSymbol::kDynamite) ||
         (reveal.reason == RevealReason::kRattlesnake && symbol == RevealSymbol::kSnake) ||
-        (reveal.reason == RevealReason::kSidCurry && symbol == RevealSymbol::kBarrel);
+        (reveal.reason == RevealReason::kSidCurry && symbol == RevealSymbol::kBarrel) ||
+        (reveal.reason == RevealReason::kWhiskey && symbol == RevealSymbol::kHorseshoe);
     reveal_events_.push_back(
         {++reveal_sequence_, reveal.reason, reveal.player,
          revealed_cards_[static_cast<std::size_t>(selected_index)], triggered});
@@ -2264,6 +2427,12 @@ void GameState::FinishReveal(int selected_index) {
     } else {
       AdvanceStartTurn();
     }
+    return;
+  }
+  if (reveal.reason == RevealReason::kWhiskey) {
+    Heal(reveal.player, reveal.position, symbol == RevealSymbol::kHorseshoe ? 2 : 1);
+    decision_player_ = turn_player_;
+    phase_ = Phase::kPlay;
     return;
   }
   if (reveal.reason == RevealReason::kSidCurry) {
@@ -3327,8 +3496,11 @@ std::array<float, kObservationSize> GameState::ObservationTensor(int observer) c
     if (pending_reveal_->reason == RevealReason::kSidCurry) {
       result[obs_layout::kSidRevealOffset] = 1.0F;
     } else {
-      result[obs_layout::kRevealReasonOffset +
-             static_cast<std::size_t>(pending_reveal_->reason)] = 1.0F;
+      // Sid Curry has its own slot, so Whiskey takes the fourth.
+      const int reason = pending_reveal_->reason == RevealReason::kWhiskey
+                             ? 3
+                             : static_cast<int>(pending_reveal_->reason);
+      result[obs_layout::kRevealReasonOffset + static_cast<std::size_t>(reason)] = 1.0F;
     }
   }
   result[obs_layout::kStartTurnPendingOffset] =

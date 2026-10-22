@@ -197,6 +197,9 @@ std::string PhaseName(Phase phase) {
     case Phase::kChooseStealing: return "choose_stealing";
     case Phase::kChooseAbility: return "choose_ability";
     case Phase::kTerminal: return "terminal";
+    case Phase::kChooseSwitch: return "choose_switch";
+    case Phase::kChooseUnionPacific: return "choose_union_pacific";
+    case Phase::kChooseAmbush: return "choose_ambush";
   }
   throw std::logic_error("unknown phase");
 }
@@ -219,6 +222,9 @@ std::string PhaseLabel(Phase phase) {
     case Phase::kChooseStealing: return "Choose a card back or Equipment";
     case Phase::kChooseAbility: return "Resolve a character ability";
     case Phase::kTerminal: return "The duel is over";
+    case Phase::kChooseSwitch: return "Choose which side Switch swaps";
+    case Phase::kChooseUnionPacific: return "Choose a deck to draw from";
+    case Phase::kChooseAmbush: return "Choose Equipment to discard";
   }
   throw std::logic_error("unknown phase");
 }
@@ -254,6 +260,15 @@ std::string PhaseHint(Phase phase) {
       return "Your Shotgun shot was avoided. Swap either your own two "
              "characters or the opponent's — the active one becomes the "
              "rearguard and back.";
+    case Phase::kChooseSwitch:
+      return "Switch swaps up to two sides, each at most once, in the order "
+             "you choose.";
+    case Phase::kChooseUnionPacific:
+      return "Union Pacific draws 2 cards in total. Take each one from your "
+             "deck or the opponent's.";
+    case Phase::kChooseAmbush:
+      return "Ambush discards 1 card in play from your active character, then "
+             "1 from any active character. Either may be skipped.";
     case Phase::kDuelResponse:
       return "The Duel goes back and forth: discard a card that can shoot to "
              "keep it running, or concede and lose 1 life.";
@@ -479,6 +494,7 @@ std::string RevealReasonName(GameState::RevealReason reason) {
     case GameState::RevealReason::kDynamite: return "dynamite";
     case GameState::RevealReason::kRattlesnake: return "rattlesnake";
     case GameState::RevealReason::kSidCurry: return "sid_curry";
+    case GameState::RevealReason::kWhiskey: return "whiskey";
   }
   throw std::logic_error("unknown reveal reason");
 }
@@ -629,6 +645,12 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       if (state.CurrentPhase() == Phase::kDuelResponse && !accept) {
         label = "Concede the Duel";
         detail = "Lose 1 life";
+      } else if (state.CurrentPhase() == Phase::kChooseSwitch) {
+        label = accept ? "Swap the other side too" : "Stop here";
+        detail = accept ? "Switch's second swap" : "Keep the other side as it is";
+      } else if (state.CurrentPhase() == Phase::kChooseAmbush) {
+        label = "Skip";
+        detail = "Discard nothing here";
       } else if (!ability.label.empty()) {
         label = accept ? ability.accept : ability.skip;
         detail = accept ? ability.accept_detail : ability.skip_detail;
@@ -640,8 +662,13 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       break;
     }
     case ActionKind::kChooseSwap:
-      label = action.card_instance == 1 ? "Swap opponent characters" :
-                                         "Swap your characters";
+      if (state.CurrentPhase() == Phase::kChooseUnionPacific) {
+        label = action.card_instance == 1 ? "Draw from the opponent's deck"
+                                          : "Draw from your deck";
+      } else {
+        label = action.card_instance == 1 ? "Swap opponent characters" :
+                                           "Swap your characters";
+      }
       break;
     case ActionKind::kChooseCardBack:
       label = action.card_instance == 0 ? "Choose a Law card back" :
@@ -756,6 +783,10 @@ std::string RevealText(const GameState::RevealEvent& event) {
       return "Rattlesnake reveals " + drawn +
              (event.triggered ? ": a Snake symbol, so it bites for 1 life"
                               : ": no Snake symbol, so no bite");
+    case GameState::RevealReason::kWhiskey:
+      return "Whiskey reveals " + drawn +
+             (event.triggered ? ": a Horseshoe, so the active character regains 2 life"
+                              : ": no Horseshoe, so the active character regains 1 life");
   }
   return "Reveals " + drawn;
 }

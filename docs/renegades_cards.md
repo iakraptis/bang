@@ -175,7 +175,8 @@ Reinforcements but cannot be played yet.
 | BANG!: Lightning, Savage, Spencer, Walker, Whitney | Done, with tests |
 | Avoid Actions: Agility, Feint | Done, with tests |
 | Other Resources: Double Barrel, Howitzer, Indian Chief, Slap | To do |
-| Sharps; Actions Ambush, Ricochet, Switch, Union Pacific, Whiskey; Equipment Sidekick, Spurs | To do |
+| Actions: Ambush, Switch, Union Pacific, Whiskey | Done, with tests |
+| Sharps; Ricochet; Equipment Sidekick, Spurs | To do |
 | Characters | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 

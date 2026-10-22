@@ -1044,6 +1044,108 @@ void TestRenegadeBangAndAvoidCards() {
   }
 }
 
+void TestRenegadeActionCards() {
+  using CN = bang::CardName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto make = [&](std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  {
+    // Switch: up to two sides, each once, in the order chosen.
+    auto state = make({CN::kSwitch, CN::kSwitch, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int law_active = state.Players()[0].active_position;
+    const int outlaw_active = state.Players()[1].active_position;
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSwitch), bang::Target::kOwnActive));
+    Require(state.CurrentPhase() == bang::Phase::kChooseSwitch &&
+                HasAction(state, bang::kChooseOwnSwapAction) &&
+                HasAction(state, bang::kChooseOpponentSwapAction),
+            "Switch may start with either side");
+    state.ApplyAction(bang::kChooseOpponentSwapAction);
+    Require(state.Players()[1].active_position != outlaw_active &&
+                HasAction(state, bang::kAcceptOptionalAction) &&
+                !HasAction(state, bang::kChooseOpponentSwapAction),
+            "the first Switch swap happens, then the other side is optional");
+    state.ApplyAction(bang::kAcceptOptionalAction);
+    Require(state.Players()[0].active_position != law_active &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "Switch swaps both sides when chosen");
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSwitch), bang::Target::kOwnActive));
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    state.ApplyAction(bang::kSkipOptionalAction);
+    Require(state.Players()[0].active_position == law_active &&
+                state.Players()[1].active_position != outlaw_active &&
+                HasAction(state, bang::kSwapAction),
+            "a single Switch swap is allowed and does not use the voluntary swap");
+  }
+  {
+    // Union Pacific: 2 cards in total, from either deck.
+    auto state = make({CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kUnionPacific, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    EndCurrentTurn(state);
+    const auto law_deck = state.Players()[0].deck.size();
+    const auto outlaw_deck = state.Players()[1].deck.size();
+    const auto outlaw_hand = state.Players()[1].hand.size();
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kUnionPacific),
+                                           bang::Target::kOwnActive));
+    Require(state.CurrentPhase() == bang::Phase::kChooseUnionPacific, "Union Pacific asks for decks");
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    state.ApplyAction(bang::kChooseOpponentSwapAction);
+    Require(state.Players()[1].hand.size() == outlaw_hand + 1 &&
+                state.Players()[1].deck.size() == outlaw_deck - 1 &&
+                state.Players()[0].deck.size() == law_deck - 1 &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "Union Pacific draws one card from each chosen deck");
+  }
+  {
+    // Ambush: 1 card from your own AC, then 1 from any AC.
+    auto state = make({CN::kHat, CN::kBarrel, CN::kAmbush, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int hat = HandCard(state, 0, CN::kHat);
+    const int barrel = HandCard(state, 0, CN::kBarrel);
+    state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOpponentActive));
+    state.ApplyAction(bang::kSwapAction);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kAmbush), bang::Target::kOwnActive));
+    Require(HasAction(state, bang::SelectCardAction(hat)) &&
+                !HasAction(state, bang::SelectCardAction(barrel)),
+            "Ambush first picks from your own active character");
+    state.ApplyAction(bang::SelectCardAction(hat));
+    Require(HasAction(state, bang::SelectCardAction(barrel)), "then from any active character");
+    state.ApplyAction(bang::SelectCardAction(barrel));
+    const auto& discard = state.DiscardPile();
+    Require(std::find(discard.begin(), discard.end(), hat) != discard.end() &&
+                std::find(discard.begin(), discard.end(), barrel) != discard.end() &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "Ambush discards both picks from play");
+  }
+  for (const bool horseshoe : {true, false}) {
+    // Whiskey: reveal; a Horseshoe heals the active 2, anything else 1.
+    auto state = make({CN::kColt, CN::kWinchester, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kWhiskey, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed,
+                       CN::kMissed, CN::kMissed, horseshoe ? CN::kClock : CN::kBeer});
+    const int outlaw_active = state.Players()[1].active_position;
+    const auto outlaw_life = [&] {
+      return state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life;
+    };
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kColt)));
+    state.ApplyAction(bang::kTakeHitAction);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kWinchester)));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(outlaw_life() == 2, "the Outlaw's active is down to 2 life");
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kWhiskey), bang::Target::kOwnActive));
+    Require(outlaw_life() == (horseshoe ? 4 : 3) && state.CurrentPhase() == bang::Phase::kPlay,
+            "Whiskey heals 2 on a Horseshoe, otherwise 1");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -4744,6 +4846,7 @@ int main() {
     TestAvoidResources();
     TestReinforcementsRandomPlay();
     TestRenegadeBangAndAvoidCards();
+    TestRenegadeActionCards();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

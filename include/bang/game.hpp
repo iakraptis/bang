@@ -64,6 +64,10 @@ enum class Phase : std::uint8_t {
   kChooseStealing,
   kChooseAbility,
   kTerminal,
+  // Renegades (appended so earlier phases keep their input slots)
+  kChooseSwitch,
+  kChooseUnionPacific,
+  kChooseAmbush,
 };
 
 class FastRng {
@@ -134,6 +138,7 @@ class GameState {
     kDynamite,
     kRattlesnake,
     kSidCurry,
+    kWhiskey,
   };
   // One entry per resolved reveal (card flipped off a deck for Dynamite,
   // Rattlesnake, Barrel, …). Sequence numbers grow monotonically so a UI can
@@ -257,6 +262,11 @@ class GameState {
   std::array<int, kCardInstanceCount> entered_play_turn_{};
   // Additional BANG! cards allowed this turn (Lightning).
   int extra_bang_allowance_ = 0;
+  // Switch: the side that may still swap once the first swap has resolved.
+  int switch_second_player_ = -1;
+  int union_pacific_remaining_ = 0;
+  // Ambush: 0 picks from your own AC, 1 from any AC.
+  int ambush_stage_ = 0;
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -344,6 +354,12 @@ class GameState {
   bool CanUseResource(int player, int card_instance) const;
   // Walker goes back to its owner and Feint takes the BANG! card it avoided.
   void ApplyAvoidedCardMoves(const PendingHit& hit);
+  bool CanSwapSide(int player) const;
+  void FinishSwitchChoice(bool opponent);
+  void ContinueSwitch();
+  void FinishSwitchSecond(bool accept);
+  void FinishUnionPacificDraw(bool opponent);
+  void FinishAmbushPick(std::optional<int> card_instance);
   void UseResource(int card_instance, Target target);
   bool IsSupportedBang(CardName name) const;
   bool IsSupportedAction(CardName name) const;
