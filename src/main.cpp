@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "bang/game.hpp"
+#include "bang/json.hpp"
+#include "bang/static_policy.hpp"
 #include "bang/web.hpp"
 #ifdef BANG_ENABLE_TORCH
 #include "bang/training.hpp"
@@ -385,6 +387,59 @@ int main(int argc, char** argv) {
                        argc >= 5 ? std::atoi(argv[4]) : 2000,
                        argc >= 6 ? std::atoi(argv[5]) : 31337)
                        .Dump()
+                << '\n';
+      return 0;
+    }
+    if (command == "policy-logits") {
+      // Scores a static policy assigns to every legal move along fixed random
+      // base-game playouts. Moves are named rather than numbered so a fixture
+      // stays comparable when the action space is renumbered.
+      if (argc < 3) {
+        throw std::invalid_argument(
+            "policy-logits requires a static policy JSON file");
+      }
+      const auto policy = bang::LoadStaticPolicyFile(argv[2]);
+      const int decisions = argc >= 4 ? std::atoi(argv[3]) : 300;
+      const std::uint64_t seed =
+          argc >= 5 ? std::strtoull(argv[4], nullptr, 10) : 4242;
+      bang::FastRng rng(seed ^ 0x6a09e667f3bcc909ULL);
+      int game = 0;
+      bang::GameState state(
+          bang::GameConfig{.seed = seed, .characters_per_side = 4});
+      bang::JsonValue::Array rows;
+      while (static_cast<int>(rows.size()) < decisions) {
+        if (state.IsTerminal()) {
+          state = bang::GameState(bang::GameConfig{
+              .seed = seed + static_cast<std::uint64_t>(++game),
+              .characters_per_side = 4});
+        }
+        const std::vector<int> legal = state.LegalActions();
+        if (legal.size() > 1) {
+          std::vector<bang::ActionFeature> features;
+          bang::JsonValue::Array moves;
+          for (const int action : legal) {
+            features.push_back(bang::EncodeAction(action));
+            moves.emplace_back(bang::ActionToString(action));
+          }
+          const auto logits = bang::StaticPolicyLogits(
+              policy, state.TrainingObservationTensor(state.CurrentPlayer()),
+              features);
+          bang::JsonValue::Array values;
+          for (const float value : logits) {
+            values.emplace_back(static_cast<double>(value));
+          }
+          rows.emplace_back(bang::JsonValue::Object{
+              {"game", game},
+              {"moves", std::move(moves)},
+              {"logits", std::move(values)},
+          });
+        }
+        state.ApplyAction(legal[rng.USize(legal.size())]);
+      }
+      std::cout << bang::JsonValue(bang::JsonValue::Object{
+                       {"seed", static_cast<double>(seed)},
+                       {"decisions", std::move(rows)},
+                   }).Dump()
                 << '\n';
       return 0;
     }
