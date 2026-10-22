@@ -498,6 +498,7 @@ std::string CardKindName(CardKind kind) {
     case CardKind::kAction: return "action";
     case CardKind::kEquipment: return "equipment";
     case CardKind::kBang: return "bang";
+    case CardKind::kResource: return "resource";
   }
   throw std::logic_error("unknown card kind");
 }

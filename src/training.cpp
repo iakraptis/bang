@@ -1286,8 +1286,8 @@ CheckpointMetadata Metadata(
   return {
       .model_type = config.model_type,
       .ruleset = "base_four_character",
-      .observation_abi = "bang_training_observation_v1",
-      .action_feature_abi = "bang_action_feature_v1",
+      .observation_abi = kObservationAbi,
+      .action_feature_abi = kActionFeatureAbi,
       .observation_size = kTrainingObservationSize,
       .action_feature_size = kActionFeatureSize,
       .privileged_size = kPrivilegedObservationSize,
@@ -1837,8 +1837,9 @@ JsonValue SelfPlayStatsJson(
     const SelfPlayStats& stats,
     int seed) {
   JsonValue::Array characters;
-  characters.reserve(kCharacterCount);
-  for (int character = 0; character < kCharacterCount; ++character) {
+  characters.reserve(kBaseCharacterCount);
+  // Self-play evaluates base games, so only the base roster can be dealt.
+  for (int character = 0; character < kBaseCharacterCount; ++character) {
     const auto& bucket =
         stats.characters[static_cast<std::size_t>(character)];
     const auto& data = GetCharacter(character);
@@ -2115,6 +2116,11 @@ int RunTraining(const TrainingConfig& config) {
       throw std::runtime_error(
           "resume checkpoint holds a " + metadata.model_type +
           " policy but training was configured for " + config.model_type);
+    }
+    if (metadata.layout != kLayoutDims) {
+      throw std::runtime_error(
+          "resume checkpoint was trained on an older input layout; it can be "
+          "evaluated and played, but training must start a new run");
     }
     LoadPolicyCheckpoint(config.resume_from, network);
     if (!device.is_cpu()) CopyModuleState(network, learner);

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 
+#include "bang/action_space.hpp"
 #include "bang/json.hpp"
 
 namespace bang {
@@ -13,8 +14,10 @@ namespace bang {
 struct CheckpointMetadata {
   std::string model_type = "bang_structured_v2";
   std::string ruleset = "base_four_character";
-  std::string observation_abi = "bang_training_observation_v1";
-  std::string action_feature_abi = "bang_action_feature_v1";
+  std::string observation_abi = kObservationAbi;
+  std::string action_feature_abi = kActionFeatureAbi;
+  // The input layout the policy was trained on (ABI v1 metadata: the base one).
+  LayoutDims layout = kLayoutDims;
   int observation_size = 0;
   int action_feature_size = 0;
   int privileged_size = 0;

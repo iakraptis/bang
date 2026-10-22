@@ -102,6 +102,7 @@ struct PlayerState {
 
 struct GameConfig {
   std::uint64_t seed = 1;
+  GameMode mode = GameMode::kBase;
   int characters_per_side = 4;
   bool shuffle_decks = true;
   bool shuffle_characters = true;
@@ -112,6 +113,9 @@ struct GameConfig {
 class GameState {
  public:
   explicit GameState(GameConfig config = {});
+
+  // Which cards and characters this game deals.
+  GameMode Mode() const { return config_.mode; }
 
   int CurrentPlayer() const;
   int TurnPlayer() const;

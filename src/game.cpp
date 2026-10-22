@@ -40,9 +40,12 @@ std::size_t FastRng::USize(std::size_t upper) {
 }
 
 GameState::GameState(GameConfig config) : config_(std::move(config)), rng_(config_.seed) {
+  const int roster_size =
+      static_cast<int>(CharacterIds(Side::kLaw, config_.mode).size());
   if (config_.characters_per_side < 2 ||
-      config_.characters_per_side > kCharactersPerSide) {
-    throw std::invalid_argument("characters_per_side must be between 2 and 12");
+      config_.characters_per_side > roster_size) {
+    throw std::invalid_argument(
+        "characters_per_side must be between 2 and " + std::to_string(roster_size));
   }
   InitializePlayers();
 }
@@ -51,7 +54,7 @@ void GameState::InitializePlayers() {
   for (int player = 0; player < kSideCount; ++player) {
     auto& state = players_[static_cast<std::size_t>(player)];
     state.side = static_cast<Side>(player);
-    const auto expected_deck = StartingDeck(state.side);
+    const auto expected_deck = StartingDeck(state.side, config_.mode);
     state.deck = config_.starting_decks[static_cast<std::size_t>(player)];
     if (state.deck.empty()) {
       state.deck = expected_deck;
@@ -69,7 +72,7 @@ void GameState::InitializePlayers() {
 
     std::vector<int> roster = config_.character_rosters[static_cast<std::size_t>(player)];
     if (roster.empty()) {
-      roster = CharacterIds(state.side);
+      roster = CharacterIds(state.side, config_.mode);
       if (config_.shuffle_characters) rng_.Shuffle(roster);
       roster.resize(static_cast<std::size_t>(config_.characters_per_side));
       // The selected group is shuffled again before forming the reserve.

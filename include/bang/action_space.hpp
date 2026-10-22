@@ -42,10 +42,10 @@ struct ActionKey {
 };
 
 inline constexpr int kActionKindCount = 15;
-inline constexpr int kCardKindCount = 3;
+inline constexpr int kCardKindCount = 4;
 inline constexpr int kPhaseCapacity = 16;
 static_assert(static_cast<int>(ActionKind::kUseAbility) + 1 == kActionKindCount);
-static_assert(static_cast<int>(CardKind::kBang) + 1 == kCardKindCount);
+static_assert(static_cast<int>(CardKind::kResource) + 1 == kCardKindCount);
 
 // The counts every policy input is laid out from (see input_layout.hpp).
 inline constexpr LayoutDims kLayoutDims{

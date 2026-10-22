@@ -91,6 +91,7 @@ JsonValue CheckpointMetadataJson(const CheckpointMetadata& metadata) {
       {"ruleset", metadata.ruleset},
       {"observationAbi", metadata.observation_abi},
       {"actionFeatureAbi", metadata.action_feature_abi},
+      {"layout", LayoutDimsJson(metadata.layout)},
       {"observationSize", metadata.observation_size},
       {"actionFeatureSize", metadata.action_feature_size},
       {"privilegedSize", metadata.privileged_size},
@@ -134,18 +135,27 @@ CheckpointMetadata LoadCheckpointMetadata(
       .learning_rate = NumberField(object, "learningRate"),
       .elapsed_seconds = NumberField(object, "elapsedSeconds"),
   };
+  metadata.layout = metadata.observation_abi == kObservationAbi
+                        ? LayoutDimsFromJson(Field(object, "layout"))
+                        : kBaseLayoutDims;
   ValidateCheckpointCompatibility(metadata);
   return metadata;
 }
 
+// A checkpoint is compatible when its recorded layout fits within the
+// current one: an older, smaller layout is widened on load.
 void ValidateCheckpointCompatibility(const CheckpointMetadata& metadata) {
+  const bool v2 = metadata.observation_abi == kObservationAbi &&
+                  metadata.action_feature_abi == kActionFeatureAbi;
+  const bool v1 = metadata.observation_abi == kObservationAbiV1 &&
+                  metadata.action_feature_abi == kActionFeatureAbiV1 &&
+                  metadata.layout == kBaseLayoutDims;
   if (!IsSupportedModelType(metadata.model_type) ||
-      metadata.ruleset != "base_four_character" ||
-      metadata.observation_abi != "bang_training_observation_v1" ||
-      metadata.action_feature_abi != "bang_action_feature_v1" ||
-      metadata.observation_size != kTrainingObservationSize ||
-      metadata.action_feature_size != kActionFeatureSize ||
-      metadata.privileged_size != kPrivilegedObservationSize) {
+      metadata.ruleset != "base_four_character" || !(v1 || v2) ||
+      !LayoutFits(metadata.layout, kLayoutDims) ||
+      metadata.observation_size != TrainingObservationSizeFor(metadata.layout) ||
+      metadata.action_feature_size != ActionFeatureSizeFor(metadata.layout) ||
+      metadata.privileged_size != PrivilegedSizeFor(metadata.layout)) {
     throw std::runtime_error(
         "checkpoint is incompatible with the current BANG training ABI");
   }

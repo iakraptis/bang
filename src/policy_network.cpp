@@ -185,6 +185,64 @@ void SavePolicyCheckpoint(
       CheckpointMetadataJson(metadata).Dump() + "\n");
 }
 
+namespace {
+
+// The layers that read raw inputs, and which column map widens each.
+const std::vector<int>* InputColumns(const std::string& name,
+                                     const PolicyInputColumnMaps& columns) {
+  if (name == "public_encoder.0.weight") return &columns.public_encoder;
+  if (name == "identity_encoder.0.weight") return &columns.identity_encoder;
+  if (name == "action_encoder.0.weight") return &columns.action_encoder;
+  if (name == "privileged_encoder.0.weight") return &columns.privileged_encoder;
+  return nullptr;
+}
+
+// Reads a checkpoint saved on an older, smaller input layout into a module
+// laid out for the current one. Every tensor keeps its values; the layers that
+// read raw inputs get each old column at its mapped position and zero weight
+// for inputs that did not exist when the policy was trained.
+void LoadWidened(torch::nn::Module& module,
+                 torch::serialize::InputArchive& archive,
+                 const std::string& prefix,
+                 const PolicyInputColumnMaps& columns) {
+  torch::NoGradGuard no_grad;
+  auto parameters = module.named_parameters(/*recurse=*/false);
+  for (auto& item : parameters) {
+    torch::Tensor stored;
+    archive.read(item.key(), stored);
+    torch::Tensor target = item.value();
+    const std::string name = prefix + item.key();
+    if (stored.sizes() == target.sizes()) {
+      target.copy_(stored);
+      continue;
+    }
+    const std::vector<int>* map = InputColumns(name, columns);
+    if (map == nullptr || stored.dim() != 2 || target.dim() != 2 ||
+        stored.size(0) != target.size(0) ||
+        stored.size(1) != static_cast<std::int64_t>(map->size())) {
+      throw std::runtime_error(
+          "checkpoint tensor " + name + " does not fit the current input layout");
+    }
+    target.zero_();
+    target.index_copy_(
+        1, torch::tensor(std::vector<std::int64_t>(map->begin(), map->end()), torch::kLong),
+        stored.to(target.dtype()));
+  }
+  auto buffers = module.named_buffers(/*recurse=*/false);
+  for (auto& item : buffers) {
+    torch::Tensor stored;
+    archive.read(item.key(), stored, /*is_buffer=*/true);
+    item.value().copy_(stored);
+  }
+  for (auto& child : module.named_children()) {
+    torch::serialize::InputArchive child_archive;
+    archive.read(child.key(), child_archive);
+    LoadWidened(*child.value(), child_archive, prefix + child.key() + ".", columns);
+  }
+}
+
+}  // namespace
+
 void LoadPolicyCheckpoint(
     const std::filesystem::path& path,
     BangActorCritic& network) {
@@ -197,7 +255,11 @@ void LoadPolicyCheckpoint(
   }
   torch::serialize::InputArchive archive;
   archive.load_from(path.string());
-  network->load(archive);
+  if (metadata.layout == kLayoutDims) {
+    network->load(archive);
+  } else {
+    LoadWidened(*network, archive, "", PolicyInputColumns(metadata.layout, kLayoutDims));
+  }
 }
 
 BangActorCritic LoadPolicyFromCheckpoint(const std::filesystem::path& path) {

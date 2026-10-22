@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <vector>
 
+#include "bang/json.hpp"
+
 namespace bang {
 
 struct LayoutDims {
@@ -24,7 +26,18 @@ struct LayoutDims {
   int phases = 0;      // phase one-hot capacity, not the phase count
   int card_kinds = 0;
   int action_kinds = 0;
+
+  friend constexpr bool operator==(const LayoutDims&, const LayoutDims&) = default;
 };
+
+// Whether every count of `from` fits within `to`, so a policy laid out for
+// `from` can be moved onto `to`.
+constexpr bool LayoutFits(const LayoutDims& from, const LayoutDims& to) {
+  return from.card_names <= to.card_names && from.characters <= to.characters &&
+         from.card_instances <= to.card_instances && from.sides <= to.sides &&
+         from.phases <= to.phases && from.card_kinds <= to.card_kinds &&
+         from.action_kinds <= to.action_kinds;
+}
 
 // The layout every checkpoint before the Renegades expansion was trained on.
 inline constexpr LayoutDims kBaseLayoutDims{31, 24, 80, 2, 16, 3, 15};
@@ -228,5 +241,28 @@ static_assert(BlockTotal(ActionFeatureBlockSizes(kBaseLayoutDims)) == 91);
 enum class LayoutKind { kObservation, kTraining, kPrivileged, kActionFeature };
 
 std::vector<int> LayoutIndexMap(LayoutKind kind, const LayoutDims& from, const LayoutDims& to);
+
+// Column maps for the four network layers that read raw inputs: for each
+// input column of a layer trained on `from`, its column on `to`.
+struct PolicyInputColumnMaps {
+  std::vector<int> public_encoder;      // training observation, public part
+  std::vector<int> identity_encoder;    // training observation, identity part
+  std::vector<int> action_encoder;      // action features
+  std::vector<int> privileged_encoder;  // privileged observation
+};
+PolicyInputColumnMaps PolicyInputColumns(const LayoutDims& from, const LayoutDims& to);
+
+// Policy metadata records the layout it was trained on. Metadata written
+// before layouts were recorded (ABI v1) implies kBaseLayoutDims.
+inline constexpr const char* kObservationAbiV1 = "bang_training_observation_v1";
+inline constexpr const char* kObservationAbi = "bang_training_observation_v2";
+inline constexpr const char* kActionFeatureAbiV1 = "bang_action_feature_v1";
+inline constexpr const char* kActionFeatureAbi = "bang_action_feature_v2";
+JsonValue LayoutDimsJson(const LayoutDims& dims);
+LayoutDims LayoutDimsFromJson(const JsonValue& value);
+int TrainingObservationSizeFor(const LayoutDims& dims);
+int ActionFeatureSizeFor(const LayoutDims& dims);
+int PrivilegedSizeFor(const LayoutDims& dims);
+int PublicObservationSizeFor(const LayoutDims& dims);
 
 }  // namespace bang

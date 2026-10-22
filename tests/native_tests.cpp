@@ -4,6 +4,7 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -119,13 +120,15 @@ void RequireCardConservation(const bang::GameState& state) {
     }
   }
   std::sort(cards.begin(), cards.end());
-  Require(cards.size() == bang::kCardInstanceCount,
+  // Exactly the cards this game's mode dealt: both sides' starting decks.
+  std::vector<int> dealt = bang::StartingDeck(bang::Side::kLaw, state.Mode());
+  const auto outlaw = bang::StartingDeck(bang::Side::kOutlaw, state.Mode());
+  dealt.insert(dealt.end(), outlaw.begin(), outlaw.end());
+  std::sort(dealt.begin(), dealt.end());
+  Require(cards.size() == dealt.size(),
           "all physical cards remain in exactly one zone (found " +
               std::to_string(cards.size()) + ")");
-  for (int id = 0; id < bang::kCardInstanceCount; ++id) {
-    Require(cards[static_cast<std::size_t>(id)] == id,
-            "card zones contain every physical instance exactly once");
-  }
+  Require(cards == dealt, "card zones contain every dealt instance exactly once");
 }
 
 void CompleteSetup(bang::GameState& state) {
@@ -134,11 +137,19 @@ void CompleteSetup(bang::GameState& state) {
 }
 
 void TestStaticData() {
+  // Base copies (0-79) and Renegade copies (80-119) are checked separately,
+  // so the base game's composition stays pinned exactly as printed.
   std::array<std::array<int, bang::kCardNameCount>, bang::kSideCount> counts{};
+  std::array<std::array<int, bang::kCardNameCount>, bang::kSideCount> renegade_counts{};
   std::array<int, 4> reveal_counts{};
+  std::array<int, 4> renegade_reveal_counts{};
   for (const auto& instance : bang::CardInstances()) {
-    ++counts[static_cast<std::size_t>(instance.origin)][static_cast<std::size_t>(instance.name)];
-    ++reveal_counts[static_cast<std::size_t>(instance.reveal)];
+    Require(instance.renegade == (instance.id >= bang::kBaseCardInstanceCount),
+            "Renegade copies follow the base copies");
+    auto& side_counts = instance.renegade ? renegade_counts : counts;
+    ++side_counts[static_cast<std::size_t>(instance.origin)][static_cast<std::size_t>(instance.name)];
+    ++(instance.renegade ? renegade_reveal_counts : reveal_counts)
+        [static_cast<std::size_t>(instance.reveal)];
   }
   constexpr std::array<std::array<int, bang::kCardNameCount>, 2>
       kExpectedCounts{{
@@ -157,35 +168,84 @@ void TestStaticData() {
   Require(reveal_counts == std::array<int, 4>{20, 20, 10, 30},
           "printed reveal symbols follow the rulebook probabilities");
 
+  // Renegades, as transcribed in docs/renegades_cards.md.
+  using CN = bang::CardName;
+  const auto expect_renegades =
+      [&](bang::Side side, std::initializer_list<std::pair<CN, int>> expected) {
+        std::array<int, bang::kCardNameCount> want{};
+        for (const auto& [name, copies] : expected) want[static_cast<std::size_t>(name)] = copies;
+        return renegade_counts[static_cast<std::size_t>(side)] == want;
+      };
+  Require(expect_renegades(bang::Side::kLaw,
+                           {{CN::kAmbush, 1}, {CN::kAgility, 1}, {CN::kFeint, 1},
+                            {CN::kMissed, 3}, {CN::kRicochet, 1}, {CN::kSwitch, 2},
+                            {CN::kSpurs, 1}, {CN::kCarbine, 1}, {CN::kWalker, 2},
+                            {CN::kWhitney, 1}, {CN::kBuffaloRifle, 2}, {CN::kHowitzer, 1},
+                            {CN::kGoldPan, 1}, {CN::kPardner, 2}}) &&
+              expect_renegades(bang::Side::kOutlaw,
+                               {{CN::kAmbush, 1}, {CN::kAgility, 1}, {CN::kFeint, 1},
+                                {CN::kKnife, 1}, {CN::kUnionPacific, 1}, {CN::kWhiskey, 1},
+                                {CN::kSidekick, 1}, {CN::kLightning, 2}, {CN::kSavage, 1},
+                                {CN::kSharps, 2}, {CN::kSpencer, 2}, {CN::kIndianChief, 1},
+                                {CN::kDoubleBarrel, 2}, {CN::kSlap, 2}, {CN::kLuckyPenny, 1}}),
+          "all 40 Renegade card copies match the printed cards");
+  Require(renegade_reveal_counts == std::array<int, 4>{10, 10, 5, 15},
+          "Renegade reveal symbols match the printed cards");
+
+  // Decks and rosters by mode: base games deal exactly the base set.
+  for (const bang::Side side : {bang::Side::kLaw, bang::Side::kOutlaw}) {
+    const auto base_deck = bang::StartingDeck(side);
+    const auto reinforced_deck = bang::StartingDeck(side, bang::GameMode::kReinforcements);
+    const bool base_only = std::all_of(base_deck.begin(), base_deck.end(), [&](int id) {
+      const auto& card = bang::GetCardInstance(id);
+      return card.origin == side && !card.renegade;
+    });
+    const bool reinforced = std::all_of(reinforced_deck.begin(), reinforced_deck.end(), [&](int id) {
+      return bang::GetCardInstance(id).origin == side;
+    });
+    Require(base_deck.size() == 40 && base_only && reinforced_deck.size() == 60 && reinforced &&
+                std::equal(base_deck.begin(), base_deck.end(), reinforced_deck.begin()),
+            "Reinforcements adds the side's 20 Renegade cards to its base deck");
+    const auto base_roster = bang::CharacterIds(side);
+    const auto reinforced_roster = bang::CharacterIds(side, bang::GameMode::kReinforcements);
+    Require(base_roster.size() == 12 && reinforced_roster.size() == 18 &&
+                std::all_of(base_roster.begin(), base_roster.end(),
+                            [](int id) { return !bang::GetCharacter(id).renegade; }) &&
+                std::all_of(reinforced_roster.begin(), reinforced_roster.end(),
+                            [&](int id) { return bang::GetCharacter(id).side == side; }),
+            "Reinforcements adds the side's 6 Renegade characters to its roster");
+  }
+
   const std::array bang_cards{
-      bang::CardName::kCarbine, bang::CardName::kColt,
-      bang::CardName::kFanning, bang::CardName::kPeacemaker,
-      bang::CardName::kRemington, bang::CardName::kSchofield,
-      bang::CardName::kShotgun, bang::CardName::kWinchester};
+      CN::kCarbine, CN::kColt, CN::kFanning, CN::kPeacemaker,
+      CN::kRemington, CN::kSchofield, CN::kShotgun, CN::kWinchester,
+      CN::kLightning, CN::kSavage, CN::kSharps, CN::kSpencer,
+      CN::kWalker, CN::kWhitney};
   const std::array additional_hits{
-      bang::CardName::kDerringer, bang::CardName::kGatling,
-      bang::CardName::kKnife};
-  const std::array avoids{bang::CardName::kMissed,
-                          bang::CardName::kReturnFire};
+      CN::kDerringer, CN::kGatling, CN::kKnife,
+      CN::kBuffaloRifle, CN::kDoubleBarrel, CN::kHowitzer, CN::kPardner};
+  const std::array avoids{CN::kMissed, CN::kReturnFire, CN::kAgility,
+                          CN::kFeint, CN::kLuckyPenny, CN::kPardner};
   // Stampede prints both the reload cylinder and the always-active arrows.
-  const std::array reloadable{bang::CardName::kClock,
-                              bang::CardName::kScope,
-                              bang::CardName::kStampede,
-                              bang::CardName::kWater};
-  const std::array always_active{bang::CardName::kDynamite,
-                                 bang::CardName::kRattlesnake,
-                                 bang::CardName::kStampede};
+  const std::array reloadable{CN::kClock, CN::kScope, CN::kStampede,
+                              CN::kWater, CN::kSidekick, CN::kSwitch};
+  const std::array always_active{CN::kDynamite, CN::kRattlesnake, CN::kStampede};
+  const std::array resources{CN::kBuffaloRifle, CN::kDoubleBarrel, CN::kGoldPan,
+                             CN::kHowitzer, CN::kIndianChief, CN::kLuckyPenny,
+                             CN::kPardner, CN::kSlap};
   const auto contains = [](const auto& values, auto value) {
     return std::find(values.begin(), values.end(), value) != values.end();
   };
   for (int index = 0; index < bang::kCardNameCount; ++index) {
     const auto name = static_cast<bang::CardName>(index);
     const auto& card = bang::GetCard(name);
-    Require(!card.rules_text.empty(),
+    Require(card.name == name && !card.rules_text.empty(),
             "every card has browser-visible rules text");
     const bool is_bang = contains(bang_cards, name);
     Require((card.kind == bang::CardKind::kBang) == is_bang,
             "red BANG card classification matches the rulebook");
+    Require((card.kind == bang::CardKind::kResource) == contains(resources, name),
+            "green Resource classification matches the printed cards");
     Require(card.has_hit ==
                 (is_bang || contains(additional_hits, name)),
             "printed hit symbols match the rulebook");
@@ -197,15 +257,21 @@ void TestStaticData() {
             "always-active Equipment symbols match the printed cards");
   }
 
-  Require(bang::Characters().size() == 24, "there are 24 characters");
+  Require(bang::Characters().size() == 36, "there are 24 base and 12 Renegade characters");
   constexpr std::array<int, bang::kCharacterCount> kMaximumLife{
       4, 4, 4, 5, 4, 5, 3, 5, 4, 4, 5, 4,
-      4, 5, 4, 3, 4, 3, 4, 4, 4, 4, 4, 4};
+      4, 5, 4, 3, 4, 3, 4, 4, 4, 4, 4, 4,
+      3, 4, 4, 3, 4, 5, 5, 4, 3, 4, 4, 3};
   const std::array marked_characters{
       bang::CharacterName::kBartMasterson,
       bang::CharacterName::kBuffaloBell,
       bang::CharacterName::kTheStranger,
-      bang::CharacterName::kSoundanceKid};
+      bang::CharacterName::kSoundanceKid,
+      bang::CharacterName::kCharlieBasset,
+      bang::CharacterName::kTheMarshal,
+      bang::CharacterName::kBigSteve,
+      bang::CharacterName::kDutchHarry,
+      bang::CharacterName::kJimLonghair};
   for (int index = 0; index < bang::kCharacterCount; ++index) {
     const auto& character = bang::GetCharacter(index);
     Require(!character.ability_text.empty(),
@@ -214,9 +280,11 @@ void TestStaticData() {
                 character.max_life ==
                     kMaximumLife[static_cast<std::size_t>(index)],
             "character IDs and life values match the rulebook");
-    Require(character.side ==
-                (index < 12 ? bang::Side::kLaw
-                            : bang::Side::kOutlaw),
+    const bool renegade = index >= bang::kBaseCharacterCount;
+    const int in_set = renegade ? index - bang::kBaseCharacterCount : index;
+    const int per_side = renegade ? bang::kRenegadeCharactersPerSide : bang::kCharactersPerSide;
+    Require(character.renegade == renegade &&
+                character.side == (in_set < per_side ? bang::Side::kLaw : bang::Side::kOutlaw),
             "each character belongs to the printed side");
     Require(character.always_active ==
                 contains(marked_characters,
