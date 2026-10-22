@@ -346,6 +346,10 @@ int main(int argc, char** argv) {
             config.run_dir = value();
           } else if (option == "--checkpoint") {
             config.checkpoint = value();
+          } else if (option == "--static-policy") {
+            // An exported browser policy, scored by the same C++ the WASM
+            // build runs, so a candidate can be played before it ships.
+            config.static_policy = value();
           } else if (option == "--session-dir") {
             config.session_dir = value();
           } else if (option == "--torch-threads") {
