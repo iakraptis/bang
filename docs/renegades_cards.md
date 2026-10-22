@@ -179,7 +179,8 @@ Renegade characters are dealt in Reinforcements but have no abilities yet.
 | Actions: Ambush, Switch, Union Pacific, Whiskey | Done, with tests |
 | Sharps; Equipment Sidekick, Spurs | Done, with tests |
 | Ricochet; hit Resources answering Duel and Indians! | Done, with tests |
-| Characters | To do |
+| Characters: Big Steve, Charlie Basset, Hottie Delou, King Fishers | Done, with tests |
+| Other characters | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 
 ## Rules decisions

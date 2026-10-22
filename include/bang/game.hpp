@@ -276,6 +276,8 @@ class GameState {
   int ambush_stage_ = 0;
   bool ricochet_ = false;
   int slap_stage_ = 0;
+  // Characters that received a Resource this turn (King Fishers).
+  std::array<bool, kCharacterCount> received_resource_this_turn_{};
   // Wild Bill owners whose cards Slap removed; each reacts once Slap ends.
   std::vector<int> slap_wild_bill_owners_;
   std::array<PlayerState, kSideCount> players_{};
@@ -379,6 +381,9 @@ class GameState {
   void FinishSlapPick(std::optional<int> card_instance);
   void FinishSlapHandBack(Side origin);
   void FinishSlap();
+  // A Resource on `player`'s side was used for its effect (Hottie Delou's
+  // same-turn use, Charlie Basset's draw).
+  void RecordResourceUse(int player, int card_instance);
   void FinishSwitchChoice(bool opponent);
   void ContinueSwitch();
   void FinishSwitchSecond(bool accept);

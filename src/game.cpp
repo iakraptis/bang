@@ -1013,6 +1013,10 @@ void GameState::ApplyAction(int action_id) {
       } else if (GetCard(name).kind == CardKind::kResource) {
         // Resources work from the active character, whichever one was hit.
         const int owner = pending_hit_->target;
+        // Thrown away against Indians! it is discarded, not used.
+        if (CanUseResource(owner, action.card_instance) && GetCard(name).has_avoid) {
+          RecordResourceUse(owner, action.card_instance);
+        }
         RemoveEquipment(owner, players_[static_cast<std::size_t>(owner)].active_position,
                         action.card_instance);
         // Lucky Penny's card comes immediately, so it can answer later hits.
@@ -1040,6 +1044,7 @@ void GameState::StartTurn() {
   swapped_this_turn_ = false;
   bang_cards_played_ = 0;
   ability_used_this_turn_.fill(false);
+  received_resource_this_turn_.fill(false);
   extra_bang_allowance_ = 0;
   phase_ = Phase::kPlay;
   start_turn_step_ = StartTurnStep::kDynamite;
@@ -1417,6 +1422,7 @@ int GameState::LivingCharacterCount(int player) const {
 }
 
 int GameState::HandLimit(int player) const {
+  if (IsCharacterAbilityActive(player, CharacterName::kBigSteve)) return 6;
   const auto& state = players_[static_cast<std::size_t>(player)];
   const int life = state.positions[static_cast<std::size_t>(state.active_position)].life;
   return life == 1 ? 2 : life;
@@ -1600,6 +1606,17 @@ void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
   ForgetPublicHandCard(actor, card_instance);
   equipment.push_back(card_instance);
   entered_play_turn_[static_cast<std::size_t>(card_instance)] = turn_number_;
+  if (GetCard(name).kind == CardKind::kResource) {
+    const int receiver = players_[static_cast<std::size_t>(target_player)]
+                             .positions[static_cast<std::size_t>(target_position)]
+                             .character_id;
+    if (receiver >= 0 && !received_resource_this_turn_[static_cast<std::size_t>(receiver)]) {
+      received_resource_this_turn_[static_cast<std::size_t>(receiver)] = true;
+      for (int player = 0; player < kSideCount; ++player) {
+        if (IsCharacterAbilityActive(player, CharacterName::kKingFishers)) DrawOne(player);
+      }
+    }
+  }
   if (replaced) {
     BeginWildBillReaction(target_player, actor, ResumeKind::kPlay,
                           target_position);
@@ -1618,21 +1635,39 @@ bool GameState::CanUseResource(int player, int card_instance) const {
   if (GetCard(card.name).kind != CardKind::kResource || !IsSupportedResource(card.name)) {
     return false;
   }
-  if (entered_play_turn_[static_cast<std::size_t>(card_instance)] == turn_number_) {
-    return false;
-  }
   // Like blue Equipment, a Resource works only on the active character.
   const auto& state = players_[static_cast<std::size_t>(player)];
   const auto& active = state.positions[static_cast<std::size_t>(state.active_position)];
+  if (entered_play_turn_[static_cast<std::size_t>(card_instance)] == turn_number_) {
+    // Hottie Delou may use one of her Resources the turn it was put into play.
+    const bool hottie =
+        active.character_id == static_cast<int>(CharacterName::kHottieDelou) &&
+        !ability_used_this_turn_[static_cast<std::size_t>(CharacterName::kHottieDelou)];
+    if (!hottie) return false;
+  }
   return active.life > 0 &&
          std::find(active.equipment.begin(), active.equipment.end(), card_instance) !=
              active.equipment.end();
+}
+
+void GameState::RecordResourceUse(int player, int card_instance) {
+  if (entered_play_turn_[static_cast<std::size_t>(card_instance)] == turn_number_) {
+    ability_used_this_turn_[static_cast<std::size_t>(CharacterName::kHottieDelou)] = true;
+  }
+  // Charlie Basset: once per turn, after using a Resource, draw 1 card.
+  const auto charlie = static_cast<std::size_t>(CharacterName::kCharlieBasset);
+  if (IsCharacterAbilityActive(player, CharacterName::kCharlieBasset) &&
+      !ability_used_this_turn_[charlie]) {
+    ability_used_this_turn_[charlie] = true;
+    DrawOne(player);
+  }
 }
 
 void GameState::UseResource(int card_instance, Target target) {
   if (!CanUseResource(turn_player_, card_instance)) {
     throw std::logic_error("resource is not usable");
   }
+  RecordResourceUse(turn_player_, card_instance);
   const CardName name = GetCardInstance(card_instance).name;
   auto& state = players_[static_cast<std::size_t>(turn_player_)];
   if (name == CardName::kGoldPan) {

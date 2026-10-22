@@ -1389,6 +1389,96 @@ void TestSlap() {
           "both Wild Bill hits land on the slapper's active character");
 }
 
+void TestRenegadeCharactersResources() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const auto make = [&](std::vector<int> law_roster, std::vector<int> outlaw_roster,
+                        std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = law_roster;
+    config.character_rosters[1] = outlaw_roster;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed};
+  {
+    // Big Steve: a 6-card hand limit whatever his life.
+    auto state = make({1, 9}, {id(CH::kBigSteve), 16}, {CN::kMissed, CN::kMissed, CN::kMissed,
+                                                        CN::kMissed, CN::kMissed, CN::kMissed},
+                      fillers);
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);  // 7 cards; at 5 life the usual limit would be 5
+    Require(state.Players()[1].hand.size() == 6,
+            "Big Steve keeps 6 cards at the end of his turn");
+  }
+  {
+    // Charlie Basset: once per turn, using a Resource draws 1 more card.
+    auto state = make({id(CH::kCharlieBasset), 9}, {12, 16},
+                      {CN::kGoldPan, CN::kBuffaloRifle, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed},
+                      fillers);
+    const int gold_pan = HandCard(state, 0, CN::kGoldPan);
+    const int rifle = HandCard(state, 0, CN::kBuffaloRifle);
+    state.ApplyAction(bang::PlayCardAction(gold_pan, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::PlayCardAction(rifle, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);  // Charlie is always active, even as rearguard
+    EndCurrentTurnKeeping(state, {CN::kColt});
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kColt)));
+    state.ApplyAction(bang::kTakeHitAction);
+    const auto before = state.Players()[0].hand.size();
+    state.ApplyAction(bang::UseResourceAction(rifle, bang::Target::kOpponentActive));
+    Require(state.Players()[0].hand.size() == before + 2,
+            "Buffalo Rifle draws 1 and Charlie Basset 1 more");
+    state.ApplyAction(bang::kTakeHitAction);
+    const auto after_rifle = state.Players()[0].hand.size();
+    state.ApplyAction(bang::UseResourceAction(gold_pan, bang::Target::kOwnActive));
+    Require(state.Players()[0].hand.size() == after_rifle + 1,
+            "Charlie Basset draws only once per turn");
+  }
+  {
+    // Hottie Delou: one of her Resources the turn it entered play, once per turn.
+    auto state = make({9, id(CH::kHottieDelou)}, {12, 16},
+                      {CN::kBuffaloRifle, CN::kGoldPan, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed},
+                      fillers);
+    const int rifle = HandCard(state, 0, CN::kBuffaloRifle);
+    const int gold_pan = HandCard(state, 0, CN::kGoldPan);
+    state.ApplyAction(bang::PlayCardAction(rifle, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::PlayCardAction(gold_pan, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kColt)));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(HasAction(state, bang::UseResourceAction(rifle, bang::Target::kOpponentActive)) &&
+                HasAction(state, bang::UseResourceAction(gold_pan, bang::Target::kOwnActive)),
+            "Hottie Delou's Resources work the turn they enter play");
+    state.ApplyAction(bang::UseResourceAction(gold_pan, bang::Target::kOwnActive));
+    Require(!HasAction(state, bang::UseResourceAction(rifle, bang::Target::kOpponentActive)),
+            "but only one of them per turn");
+  }
+  {
+    // King Fishers: each character's first Resource of the turn draws him 1.
+    auto state = make({1, 9}, {id(CH::kKingFishers), 16},
+                      {CN::kBuffaloRifle, CN::kBuffaloRifle, CN::kGoldPan, CN::kMissed, CN::kMissed, CN::kMissed},
+                      fillers);
+    const auto outlaw_hand = [&] { return state.Players()[1].hand.size(); };
+    const auto start = outlaw_hand();
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kBuffaloRifle),
+                                           bang::Target::kOwnRearguard));
+    Require(outlaw_hand() == start + 1, "a character's first Resource draws King Fishers 1");
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kBuffaloRifle),
+                                           bang::Target::kOwnRearguard));
+    Require(outlaw_hand() == start + 1, "a second Resource on that character does not");
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kGoldPan),
+                                           bang::Target::kOpponentActive));
+    Require(outlaw_hand() == start + 2, "another character's first Resource does");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5093,6 +5183,7 @@ int main() {
     TestSpursSidekickAndSharps();
     TestRicochetAndHitResources();
     TestSlap();
+    TestRenegadeCharactersResources();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();
