@@ -1315,8 +1315,7 @@ bool GameState::SwapCharacters(int player, bool voluntary, ResumeKind resume_kin
       IsCharacterAbilityActive(opposing_player, CharacterName::kJango);
   // Sidekick fires when its character becomes active.
   const bool sidekick_triggers = HasEquipment(player, destination, CardName::kSidekick);
-  const bool jim_triggers = IsCharacterAbilityActive(player, CharacterName::kJimLonghair) &&
-                            jim_longhair_blocked_ != opposing_player;
+  const bool jim_triggers = IsCharacterAbilityActive(player, CharacterName::kJimLonghair);
 
   movement_mover_ = player;
   movement_resume_kind_ = resume_kind;
@@ -1447,12 +1446,7 @@ void GameState::ContinueSwitch() {
 void GameState::FinishSwitchSecond(bool accept) {
   const int second = switch_second_player_;
   switch_second_player_ = -1;
-  if (accept && CanSwapSide(second)) {
-    jim_longhair_blocked_ = OtherPlayer(second);
-    const bool paused = SwapCharacters(second, false);
-    jim_longhair_blocked_ = -1;
-    if (paused) return;
-  }
+  if (accept && CanSwapSide(second) && SwapCharacters(second, false)) return;
   decision_player_ = turn_player_;
   phase_ = Phase::kPlay;
 }
@@ -2138,8 +2132,6 @@ void GameState::FinishJimLonghair(bool swap) {
     AdvanceMovementTriggers(true);
     return;
   }
-  // The opponent's side has now swapped: a Switch does not swap it again.
-  if (switch_second_player_ == opponent) switch_second_player_ = -1;
   const ResumeKind resume = movement_resume_kind_;
   movement_mover_ = -1;
   movement_resume_kind_ = ResumeKind::kPlay;

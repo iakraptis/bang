@@ -1620,8 +1620,8 @@ void TestJimLonghairAndMysticMaid() {
             "declining leaves the opponent in place");
   }
   {
-    // A Switch swapping Jim's side first: his swap of the Law replaces the
-    // Switch's second swap, so no side swaps twice.
+    // A Switch swapping Jim's side first: his swap of the Law is a separate
+    // effect, and the Switch may still swap the Law afterwards.
     auto state = make({1, 9}, {id(CH::kJimLonghair), 16},
                       {CN::kSwitch, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
                       fillers);
@@ -1631,8 +1631,12 @@ void TestJimLonghairAndMysticMaid() {
             "Jim Longhair answers the Switch");
     state.ApplyAction(bang::kAcceptOptionalAction);
     Require(active_id(state, 0) == 9 && active_id(state, 1) == 16 &&
-                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 0,
-            "both sides swapped once and the Law plays on");
+                state.CurrentPhase() == bang::Phase::kChooseSwitch && state.CurrentPlayer() == 0,
+            "Jim's swap leaves the Switch's second swap available");
+    state.ApplyAction(bang::kAcceptOptionalAction);
+    Require(active_id(state, 0) == 1 && state.CurrentPhase() == bang::Phase::kPlay &&
+                state.CurrentPlayer() == 0,
+            "the Switch swaps the Law back and the Law plays on");
   }
   {
     // Mystic Maid: 1 of her Equipment as a Colt (the turn's BANG!), then draw 1.

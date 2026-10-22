@@ -135,8 +135,9 @@ Per card:
   Indian Chief, etc.
 - **Poker Alicia**: replaces phase 1 (Draw).
 - **Jim Longhair** (implementation): his swap of the opponent happens after
-  the other swap triggers and fires that side's own triggers. During a
-  Switch it counts as the Switch's swap of that side, so no side swaps twice.
+  the other swap triggers and fires that side's own triggers. It is separate
+  from a Switch: the Switch may still swap that side afterwards, and Jim also
+  triggers on the Switch's second swap.
 - **Mystic Maid** (implementation): any of her Equipment, Resources included,
   answers a hit as ⊘ or ⊛ (not Sharps), a Duel or a Ricochet, or is played as
   the turn's Colt; she draws 1 card each time.

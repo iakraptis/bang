@@ -274,8 +274,6 @@ class GameState {
   int extra_bang_allowance_ = 0;
   // Switch: the side that may still swap once the first swap has resolved.
   int switch_second_player_ = -1;
-  // The side a Switch already swapped: Jim Longhair cannot swap it again.
-  int jim_longhair_blocked_ = -1;
   int deck_draw_player_ = -1;
   int deck_draws_remaining_ = 0;
   DeckDrawResume deck_draw_resume_ = DeckDrawResume::kPlay;
