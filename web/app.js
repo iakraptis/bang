@@ -2794,7 +2794,7 @@
      A click or Space/Enter/Escape skips to the end. */
 
   const REPLAY_PAUSE = { card: 650, move: 420, quiet: 140 };
-  const CEREMONY_VERB = /^(?:play|play_as_colt|avoid)\(/;
+  const CEREMONY_VERB = /^(?:play|play_as_colt|avoid|use_resource)\(/;
 
   async function playReplay(frames) {
     replaying = true;

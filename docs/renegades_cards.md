@@ -161,6 +161,22 @@ The base game remains the default and must play exactly as before.
    "Backhander", and El Chindi's note says he is immune to "Handover", a name
    no Renegades card carries. Read as Slap until confirmed.
 
+## Implementation status
+
+Engine support, in the order it lands. Unimplemented cards are dealt in
+Reinforcements but cannot be played yet.
+
+| Area | Status |
+|---|---|
+| Data: cards, copies, characters, Resource kind, game modes | Done |
+| Resources: placement, one-turn wait, AC only, used by the character's owner | Done |
+| `use_resource` move (play phase) and avoid Resources answering hits | Done |
+| Gold Pan, Lucky Penny, Buffalo Rifle, Pardner | Done, with tests |
+| Other Resources: Double Barrel, Howitzer, Indian Chief, Slap | To do |
+| Action, BANG!, and Equipment cards | To do |
+| Characters | To do |
+| Renegades as a side (The Third Group) and format selection | Phase 4 |
+
 ## Rules decisions
 
 Interpretations settled for this implementation:
@@ -181,5 +197,13 @@ Interpretations settled for this implementation:
   (including one the opponent places on that character), King Fishers' owner
   draws 1 card. This counts once per character per turn and works only while
   King Fishers is AC (the card has no ⇄).
+
+- **Resources** work only on the AC, like blue Equipment: one on the RC
+  cannot be used until its character becomes AC. A Resource is used by the
+  owner of the character it sits on, so one placed on the opponent's AC is
+  theirs. Avoid Resources (Lucky Penny, Pardner as ⊘) answer any hit on either
+  player's turn. Hit Resources (Buffalo Rifle, Double Barrel, Howitzer, Pardner
+  as ⊛) are used only in your own play phase and never count as BANG! cards.
+  None may be used on the turn it was put into play.
 
 No open rules questions remain for the two-player modes.

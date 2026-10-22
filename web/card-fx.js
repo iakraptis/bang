@@ -98,7 +98,7 @@
      ------------------------------------------------------------------ */
 
   const ENGINE_CALL = /^([a-z_]+)\(([^,)]*)(?:,([^)]*))?\)$/;
-  const CEREMONY_VERBS = new Set(["play", "play_as_colt", "avoid"]);
+  const CEREMONY_VERBS = new Set(["play", "play_as_colt", "avoid", "use_resource"]);
 
   // The server trims its log to the most recent entries, so once it is full
   // two states have the same length however much happened between them.
@@ -247,6 +247,7 @@
     play: ["plays", "play"],
     play_as_colt: ["fire as a Colt", "fire as a Colt"],
     avoid: ["blocks with", "block with"],
+    use_resource: ["uses", "use"],
   };
 
   function playCaption(event, actorName) {

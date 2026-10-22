@@ -86,9 +86,11 @@ void GameState::InitializePlayers() {
       if (std::adjacent_find(unique.begin(), unique.end()) != unique.end()) {
         throw std::invalid_argument("configured character roster contains duplicates");
       }
+      const auto dealable = CharacterIds(state.side, config_.mode);
       for (const int character_id : roster) {
-        if (GetCharacter(character_id).side != state.side) {
-          throw std::invalid_argument("configured character belongs to the wrong side");
+        if (std::find(dealable.begin(), dealable.end(), character_id) == dealable.end()) {
+          throw std::invalid_argument(
+              "configured character is not dealt to this side in this game mode");
         }
       }
     }
@@ -459,7 +461,8 @@ std::vector<int> GameState::LegalActions() const {
     for (const int instance : target_character.equipment) {
       const CardName name = GetCardInstance(instance).name;
       if (name == CardName::kHat ||
-          (name == CardName::kBarrel && !pending_hit_->barrel_attempted)) {
+          (name == CardName::kBarrel && !pending_hit_->barrel_attempted) ||
+          (GetCard(name).has_avoid && CanUseResource(pending_hit_->target, instance))) {
         result.push_back(AvoidHitAction(instance));
       }
     }
@@ -496,7 +499,8 @@ std::vector<int> GameState::LegalActions() const {
         result.push_back(PlayCardAction(instance, Target::kOpponentRearguard));
       }
     }
-    if (card.kind == CardKind::kEquipment && IsSupportedEquipment(card.name)) {
+    if ((card.kind == CardKind::kEquipment || card.kind == CardKind::kResource) &&
+        IsSupportedEquipment(card.name)) {
       if (jack_active) {
         result.push_back(PlayCardAction(instance, Target::kOwnActive));
       }
@@ -583,6 +587,34 @@ std::vector<int> GameState::LegalActions() const {
     for (const int instance : active.equipment) {
       if (GetCard(GetCardInstance(instance).name).reloadable) {
         result.push_back(ReloadCardAction(instance));
+      }
+    }
+  }
+  // Resources on the active character, from the turn after they entered
+  // play. Hit Resources are not BANG! cards and ignore the BANG! limit.
+  {
+    const int opponent = OtherPlayer(decision_player_);
+    const auto& opponent_state = players_[static_cast<std::size_t>(opponent)];
+    const bool opponent_rear_alive =
+        opponent_state.positions[static_cast<std::size_t>(1 - opponent_state.active_position)]
+            .life > 0;
+    const auto& active =
+        player.positions[static_cast<std::size_t>(player.active_position)];
+    for (const int instance : active.equipment) {
+      if (!CanUseResource(decision_player_, instance)) continue;
+      const CardName name = GetCardInstance(instance).name;
+      const auto shoot = [&](bool may_target_rear) {
+        result.push_back(UseResourceAction(instance, Target::kOpponentActive));
+        if (may_target_rear && opponent_rear_alive) {
+          result.push_back(UseResourceAction(instance, Target::kOpponentRearguard));
+        }
+      };
+      if (name == CardName::kGoldPan) {
+        if (!discard_.empty()) result.push_back(UseResourceAction(instance, Target::kOwnActive));
+      } else if (name == CardName::kBuffaloRifle) {
+        shoot(true);
+      } else if (name == CardName::kPardner) {
+        shoot(jack_active || HasActiveEquipment(decision_player_, CardName::kScope));
       }
     }
   }
@@ -800,7 +832,7 @@ void GameState::ApplyAction(int action_id) {
       return;
     }
     const auto& card = GetCard(GetCardInstance(action.card_instance).name);
-    if (card.kind == CardKind::kEquipment) {
+    if (card.kind == CardKind::kEquipment || card.kind == CardKind::kResource) {
       PlaceEquipment(decision_player_, action.card_instance, static_cast<Target>(action.target));
     } else if (card.kind == CardKind::kBang) {
       ResolveBang(action.card_instance, static_cast<Target>(action.target));
@@ -830,6 +862,12 @@ void GameState::ApplyAction(int action_id) {
         RecordAvoid(false);
       } else if (name == CardName::kBarrel) {
         BeginBarrelReveal(action.card_instance);
+      } else if (GetCard(name).kind == CardKind::kResource) {
+        const int owner = pending_hit_->target;
+        RemoveEquipment(owner, pending_hit_->target_position, action.card_instance);
+        // Lucky Penny's card comes immediately, so it can answer later hits.
+        if (name == CardName::kLuckyPenny) DrawOne(owner);
+        RecordAvoid(false);
       } else {
         throw std::logic_error("unsupported equipment avoid action");
       }
@@ -838,6 +876,10 @@ void GameState::ApplyAction(int action_id) {
   }
   if (action.kind == ActionKind::kTakeHit) {
     ResolveHit();
+    return;
+  }
+  if (action.kind == ActionKind::kUseResource) {
+    UseResource(action.card_instance, static_cast<Target>(action.target));
     return;
   }
   throw std::logic_error("unhandled legal action");
@@ -1245,6 +1287,7 @@ std::pair<int, int> GameState::ResolveTarget(int actor, Target target) const {
 }
 
 bool GameState::IsSupportedEquipment(CardName name) const {
+  if (IsSupportedResource(name)) return true;
   switch (name) {
     case CardName::kBank:
     case CardName::kBarrel:
@@ -1300,10 +1343,64 @@ void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
   hand.erase(card);
   ForgetPublicHandCard(actor, card_instance);
   equipment.push_back(card_instance);
+  entered_play_turn_[static_cast<std::size_t>(card_instance)] = turn_number_;
   if (replaced) {
     BeginWildBillReaction(target_player, actor, ResumeKind::kPlay,
                           target_position);
   }
+}
+
+bool GameState::IsSupportedResource(CardName name) const {
+  return name == CardName::kBuffaloRifle || name == CardName::kGoldPan ||
+         name == CardName::kLuckyPenny || name == CardName::kPardner;
+}
+
+bool GameState::CanUseResource(int player, int card_instance) const {
+  const auto& card = GetCardInstance(card_instance);
+  if (GetCard(card.name).kind != CardKind::kResource || !IsSupportedResource(card.name)) {
+    return false;
+  }
+  if (entered_play_turn_[static_cast<std::size_t>(card_instance)] == turn_number_) {
+    return false;
+  }
+  // Like blue Equipment, a Resource works only on the active character.
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  const auto& active = state.positions[static_cast<std::size_t>(state.active_position)];
+  return active.life > 0 &&
+         std::find(active.equipment.begin(), active.equipment.end(), card_instance) !=
+             active.equipment.end();
+}
+
+void GameState::UseResource(int card_instance, Target target) {
+  if (!CanUseResource(turn_player_, card_instance)) {
+    throw std::logic_error("resource is not usable");
+  }
+  const CardName name = GetCardInstance(card_instance).name;
+  auto& state = players_[static_cast<std::size_t>(turn_player_)];
+  if (name == CardName::kGoldPan) {
+    // The top discard is taken before the Gold Pan itself is discarded.
+    if (discard_.empty()) throw std::logic_error("Gold Pan needs a discard pile");
+    const int top = discard_.back();
+    discard_.pop_back();
+    state.hand.push_back(top);
+    MarkHandCardPublic(turn_player_, top);
+    RemoveEquipment(turn_player_, state.active_position, card_instance);
+    return;
+  }
+  RemoveEquipment(turn_player_, state.active_position, card_instance);
+  if (name == CardName::kBuffaloRifle) {
+    // Drawn immediately, before the opponent reacts.
+    DrawOne(turn_player_);
+  }
+  if (name == CardName::kBuffaloRifle || name == CardName::kPardner) {
+    const auto [target_player, target_position] = ResolveTarget(turn_player_, target);
+    pending_hit_ = PendingHit{turn_player_, target_player, target_position, turn_player_,
+                              name, false, ResponseKind::kAvoid, 1};
+    decision_player_ = target_player;
+    phase_ = Phase::kRespondToHit;
+    return;
+  }
+  throw std::logic_error("unsupported resource");
 }
 
 void GameState::RemoveEquipment(int player, int position, int card_instance) {

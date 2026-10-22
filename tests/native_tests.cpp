@@ -36,8 +36,9 @@ bang::GameConfig DeterministicConfig(int characters = 2) {
   return config;
 }
 
-std::vector<int> DeckWithTop(bang::Side side, const std::vector<bang::CardName>& draw_order) {
-  auto deck = bang::StartingDeck(side);
+std::vector<int> DeckWithTop(bang::Side side, const std::vector<bang::CardName>& draw_order,
+                             bang::GameMode mode = bang::GameMode::kBase) {
+  auto deck = bang::StartingDeck(side, mode);
   std::vector<int> selected;
   for (const auto name : draw_order) {
     const auto found = std::find_if(deck.begin(), deck.end(), [name](int instance) {
@@ -624,7 +625,9 @@ void TestObservationDoesNotLeakOpponentHand() {
 void TestTrainingContract() {
   Require(bang::kTrainingObservationSize > bang::kObservationSize,
           "training observation extends the browser observation");
-  Require(bang::kActionFeatureSize < 128,
+  // 91 for the base game; the Renegades expansion's cards, characters, and
+  // Resource move bring it to 128.
+  Require(bang::kActionFeatureSize <= 160,
           "semantic action features stay compact for batched inference");
   for (int action = 0; action < bang::kActionCount; ++action) {
     const auto decoded = bang::DecodeAction(action);
@@ -779,6 +782,152 @@ void TestRearguardEquipmentWakesWhenTargeted() {
   state.ApplyAction(bang::PlayCardAction(colt, bang::Target::kOpponentRearguard));
   Require(HasAction(state, bang::AvoidHitAction(hat)),
           "targeted RC may temporarily use its Hat");
+}
+
+void TestResourcesWaitAndUse() {
+  using CN = bang::CardName;
+  auto config = DeterministicConfig();
+  config.mode = bang::GameMode::kReinforcements;
+  config.starting_decks[0] = DeckWithTop(
+      bang::Side::kLaw,
+      {CN::kGoldPan, CN::kBuffaloRifle, CN::kBuffaloRifle, CN::kColt, CN::kMissed, CN::kMissed},
+      bang::GameMode::kReinforcements);
+  config.starting_decks[1] = DeckWithTop(
+      bang::Side::kOutlaw, {CN::kMissed, CN::kMissed, CN::kBeer, CN::kWagon, CN::kMissed},
+      bang::GameMode::kReinforcements);
+  bang::GameState state(config);
+  CompleteSetup(state);
+  const int gold_pan = HandCard(state, 0, CN::kGoldPan);
+  const int rifle = HandCard(state, 0, CN::kBuffaloRifle);
+  state.ApplyAction(bang::PlayCardAction(gold_pan, bang::Target::kOwnRearguard));
+  state.ApplyAction(bang::PlayCardAction(rifle, bang::Target::kOwnRearguard));
+  state.ApplyAction(bang::kSwapAction);
+  Require(!HasAction(state, bang::UseResourceAction(gold_pan, bang::Target::kOwnActive)) &&
+              !HasAction(state, bang::UseResourceAction(rifle, bang::Target::kOpponentActive)),
+          "a Resource cannot be used on the turn it was put into play");
+  EndCurrentTurn(state);
+  EndCurrentTurn(state);
+
+  Require(HasAction(state, bang::UseResourceAction(rifle, bang::Target::kOpponentActive)) &&
+              HasAction(state, bang::UseResourceAction(rifle, bang::Target::kOpponentRearguard)),
+          "Buffalo Rifle may target the opponent's active or rearguard from the next turn");
+  const int outlaw_rear = 1 - state.Players()[1].active_position;
+  const int rear_life = state.Players()[1].positions[static_cast<std::size_t>(outlaw_rear)].life;
+  const auto hand_before = state.Players()[0].hand.size();
+  state.ApplyAction(bang::UseResourceAction(rifle, bang::Target::kOpponentRearguard));
+  Require(state.Players()[0].hand.size() == hand_before + 1 &&
+              state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 1,
+          "Buffalo Rifle draws immediately, then the opponent answers its hit");
+  state.ApplyAction(bang::kTakeHitAction);
+  Require(state.Players()[1].positions[static_cast<std::size_t>(outlaw_rear)].life == rear_life - 1,
+          "Buffalo Rifle hits the rearguard it targeted");
+  const int colt = HandCard(state, 0, CN::kColt);
+  Require(state.CurrentPlayer() == 0 && HasAction(state, bang::PlayCardAction(colt)),
+          "a hit Resource is not a BANG! card and leaves the BANG! limit untouched");
+  state.ApplyAction(bang::PlayCardAction(colt));
+  state.ApplyAction(bang::kTakeHitAction);
+  Require(state.DiscardPile().back() == colt, "the Colt tops the discard pile");
+  state.ApplyAction(bang::UseResourceAction(gold_pan, bang::Target::kOwnActive));
+  const auto& law_hand = state.Players()[0].hand;
+  Require(std::find(law_hand.begin(), law_hand.end(), colt) != law_hand.end() &&
+              state.DiscardPile().back() == gold_pan,
+          "Gold Pan takes the top discard before being discarded itself");
+
+  // A Resource on the rearguard waits until its character becomes active.
+  const int second_rifle = HandCard(state, 0, CN::kBuffaloRifle);
+  state.ApplyAction(bang::PlayCardAction(second_rifle, bang::Target::kOwnRearguard));
+  EndCurrentTurn(state);
+  EndCurrentTurn(state);
+  Require(!HasAction(state, bang::UseResourceAction(second_rifle, bang::Target::kOpponentActive)),
+          "a Resource on the rearguard cannot be used");
+  state.ApplyAction(bang::kSwapAction);
+  Require(HasAction(state, bang::UseResourceAction(second_rifle, bang::Target::kOpponentActive)),
+          "the Resource works once its character is active");
+}
+
+void TestAvoidResources() {
+  using CN = bang::CardName;
+  auto config = DeterministicConfig();
+  config.mode = bang::GameMode::kReinforcements;
+  config.starting_decks[0] = DeckWithTop(
+      bang::Side::kLaw,
+      {CN::kPardner, CN::kMissed, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed},
+      bang::GameMode::kReinforcements);
+  config.starting_decks[1] = DeckWithTop(
+      bang::Side::kOutlaw, {CN::kLuckyPenny, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed},
+      bang::GameMode::kReinforcements);
+  bang::GameState state(config);
+  CompleteSetup(state);
+  const int pardner = HandCard(state, 0, CN::kPardner);
+  state.ApplyAction(bang::PlayCardAction(pardner, bang::Target::kOwnRearguard));
+  state.ApplyAction(bang::kSwapAction);
+  EndCurrentTurn(state);
+
+  // Pardner, put into play last turn, answers a hit on the opponent's turn.
+  const int law_active = state.Players()[0].active_position;
+  const int law_life = state.Players()[0].positions[static_cast<std::size_t>(law_active)].life;
+  state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kColt)));
+  Require(HasAction(state, bang::AvoidHitAction(pardner)), "Pardner may avoid as a Resource in play");
+  const auto law_hand = state.Players()[0].hand.size();
+  state.ApplyAction(bang::AvoidHitAction(pardner));
+  Require(state.Players()[0].positions[static_cast<std::size_t>(law_active)].life == law_life &&
+              state.Players()[0].hand.size() == law_hand,
+          "Pardner avoids the hit without drawing");
+
+  const int penny = HandCard(state, 1, CN::kLuckyPenny);
+  state.ApplyAction(bang::PlayCardAction(penny, bang::Target::kOwnRearguard));
+  state.ApplyAction(bang::kSwapAction);
+  EndCurrentTurn(state);
+
+  const int outlaw_active = state.Players()[1].active_position;
+  const int outlaw_life =
+      state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life;
+  state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kColt)));
+  Require(HasAction(state, bang::AvoidHitAction(penny)), "Lucky Penny may avoid as a Resource in play");
+  const auto outlaw_hand = state.Players()[1].hand.size();
+  state.ApplyAction(bang::AvoidHitAction(penny));
+  Require(state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life == outlaw_life &&
+              state.Players()[1].hand.size() == outlaw_hand + 1 &&
+              state.DiscardPile().back() == penny,
+          "Lucky Penny avoids the hit, draws 1 card, and is discarded");
+
+  // Renegade characters are only dealt in Reinforcements.
+  auto base = DeterministicConfig();
+  base.character_rosters[0] = {1, static_cast<int>(bang::CharacterName::kTheMarshal)};
+  bool rejected = false;
+  try {
+    bang::GameState invalid(base);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  Require(rejected, "a base game cannot be configured with Renegade characters");
+}
+
+void TestReinforcementsRandomPlay() {
+  // Whole Reinforcements games of random legal moves: every game must end,
+  // every move must be legal, and no card may be lost or duplicated, while
+  // Renegade cards and Resources pass through hands and play.
+  int finished = 0;
+  int resources_used = 0;
+  for (std::uint64_t seed = 1; seed <= 60; ++seed) {
+    bang::GameConfig config;
+    config.seed = seed;
+    config.mode = bang::GameMode::kReinforcements;
+    config.characters_per_side = 4;
+    bang::GameState state(config);
+    bang::FastRng rng(seed * 7919U);
+    for (int step = 0; step < 5000 && !state.IsTerminal(); ++step) {
+      const auto legal = state.LegalActions();
+      Require(!legal.empty(), "a Reinforcements game always has a legal move");
+      const int action = legal[rng.USize(legal.size())];
+      if (bang::DecodeAction(action).kind == bang::ActionKind::kUseResource) ++resources_used;
+      state.ApplyAction(action);
+      RequireCardConservation(state);
+    }
+    if (state.IsTerminal()) ++finished;
+  }
+  Require(finished >= 55, "random Reinforcements games run to completion");
+  Require(resources_used > 0, "random play exercises the Resource moves");
 }
 
 void TestHatAvoidsAndIsDiscarded() {
@@ -4477,6 +4626,9 @@ int main() {
     TestDuplicateEquipmentReplacement();
     TestRearguardEquipmentWakesWhenTargeted();
     TestHatAvoidsAndIsDiscarded();
+    TestResourcesWaitAndUse();
+    TestAvoidResources();
+    TestReinforcementsRandomPlay();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

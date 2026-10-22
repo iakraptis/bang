@@ -25,6 +25,8 @@ enum class ActionKind : std::uint8_t {
   kSelectCard,
   kPlayAsColt,
   kUseAbility,
+  // Discard a Resource from your active character for its effect (Renegades).
+  kUseResource,
 };
 
 enum class Target : std::uint8_t {
@@ -41,10 +43,10 @@ struct ActionKey {
   int target = -1;
 };
 
-inline constexpr int kActionKindCount = 15;
+inline constexpr int kActionKindCount = 16;
 inline constexpr int kCardKindCount = 4;
 inline constexpr int kPhaseCapacity = 16;
-static_assert(static_cast<int>(ActionKind::kUseAbility) + 1 == kActionKindCount);
+static_assert(static_cast<int>(ActionKind::kUseResource) + 1 == kActionKindCount);
 static_assert(static_cast<int>(CardKind::kResource) + 1 == kCardKindCount);
 
 // The counts every policy input is laid out from (see input_layout.hpp).
@@ -93,12 +95,15 @@ inline constexpr int kChooseOutlawBackAction = kChooseLawBackAction + 1;
 inline constexpr int kPlayAsColtOffset = kChooseOutlawBackAction + 1;
 inline constexpr int kUseAbilityOffset =
     kPlayAsColtOffset + kCardInstanceCount * kPlayTargetCount;
-inline constexpr int kActionCount = kUseAbilityOffset + kCharacterCount;
+inline constexpr int kUseResourceOffset = kUseAbilityOffset + kCharacterCount;
+inline constexpr int kActionCount =
+    kUseResourceOffset + kCardInstanceCount * kPlayTargetCount;
 
 int PlayCardAction(int card_instance, Target target = Target::kOpponentActive);
 int ReloadCardAction(int card_instance);
 int DiscardCardAction(int card_instance);
 int AvoidHitAction(int card_instance);
+int UseResourceAction(int card_instance, Target target = Target::kOpponentActive);
 int SelectCardAction(int card_instance);
 int PlayAsColtAction(int card_instance,
                      Target target = Target::kOpponentActive);

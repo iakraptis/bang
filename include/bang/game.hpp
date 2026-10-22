@@ -249,6 +249,8 @@ class GameState {
   };
 
   GameConfig config_;
+  // The turn each card copy last entered play, for Resources' one-turn wait.
+  std::array<int, kCardInstanceCount> entered_play_turn_{};
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -330,6 +332,11 @@ class GameState {
   std::optional<std::pair<int, int>> FindEquipment(int player, CardName name) const;
   std::pair<int, int> ResolveTarget(int actor, Target target) const;
   bool IsSupportedEquipment(CardName name) const;
+  // Resources (Renegades): implemented, on `player`'s active character, and
+  // not put into play this turn.
+  bool IsSupportedResource(CardName name) const;
+  bool CanUseResource(int player, int card_instance) const;
+  void UseResource(int card_instance, Target target);
   bool IsSupportedBang(CardName name) const;
   bool IsSupportedAction(CardName name) const;
   void PlaceEquipment(int actor, int card_instance, Target target);

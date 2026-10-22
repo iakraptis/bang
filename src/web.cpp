@@ -568,6 +568,7 @@ std::string ActionKindName(ActionKind kind) {
     case ActionKind::kSelectCard: return "select_card";
     case ActionKind::kPlayAsColt: return "play_as_colt";
     case ActionKind::kUseAbility: return "use_ability";
+    case ActionKind::kUseResource: return "use_resource";
   }
   throw std::logic_error("unknown action kind");
 }
@@ -698,6 +699,18 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       }
       result["card"] = CardJson(action.card_instance);
       result["cardInstance"] = action.card_instance;
+      break;
+    }
+    case ActionKind::kUseResource: {
+      const auto& card = GetCard(GetCardInstance(action.card_instance).name);
+      label = "Use " + std::string(card.display_name);
+      detail = action.target == static_cast<int>(Target::kOwnActive)
+                   ? "Discard it from play for its effect"
+                   : "Target: " + TargetLabel(static_cast<Target>(action.target));
+      result["card"] = CardJson(action.card_instance);
+      result["cardInstance"] = action.card_instance;
+      result["target"] = TargetName(static_cast<Target>(action.target));
+      result["targetLabel"] = TargetLabel(static_cast<Target>(action.target));
       break;
     }
     case ActionKind::kUseAbility: {
