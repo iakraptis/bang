@@ -1479,6 +1479,104 @@ void TestRenegadeCharactersResources() {
   }
 }
 
+void TestTheMarshalAndPokerAlicia() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed,
+                                CN::kMissed, CN::kMissed, CN::kMissed};
+  {
+    // The Marshal in the starting pair: 3 cards, each from a chosen deck,
+    // on top of the starting hand and before the first turn.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = {id(CH::kTheMarshal), 9};
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, fillers, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, fillers, kMode);
+    bang::GameState state(config);
+    const auto outlaw_deck = state.Players()[1].deck.size();
+    CompleteSetup(state);
+    Require(state.CurrentPhase() == bang::Phase::kChooseUnionPacific &&
+                state.CurrentPlayer() == 0 && state.Players()[0].hand.size() == 4,
+            "The Marshal draws before the first turn");
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    state.ApplyAction(bang::kChooseOpponentSwapAction);
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    Require(state.CurrentPhase() == bang::Phase::kPlay &&
+                state.Players()[0].hand.size() == 4 + 3 + 2 &&
+                state.Players()[1].deck.size() == outlaw_deck - 1,
+            "3 Marshal cards, then the Law's usual turn draw");
+  }
+  {
+    // The Marshal from the reserve: his cards come before the elimination ends.
+    bang::GameConfig config;
+    config.seed = 7;
+    config.mode = kMode;
+    config.characters_per_side = 3;
+    config.shuffle_decks = false;
+    config.shuffle_characters = false;
+    config.character_rosters[0] = {id(CH::kJango), 9, id(CH::kTheMarshal)};
+    config.character_rosters[1] = {12, 16, 14};
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, fillers, kMode);
+    config.starting_decks[1] = DeckWithTop(
+        bang::Side::kOutlaw, {CN::kColt, CN::kColt, CN::kColt, CN::kColt, CN::kColt}, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    for (int shot = 0; shot < 3; ++shot) {
+      EndCurrentTurn(state);
+      state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kColt)));
+      state.ApplyAction(bang::kTakeHitAction);
+      if (shot < 2) EndCurrentTurnKeeping(state, {CN::kColt});
+    }
+    Require(state.CurrentPhase() == bang::Phase::kChooseUnionPacific && state.CurrentPlayer() == 0,
+            "The Marshal draws when he replaces an eliminated character");
+    const auto law_hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    state.ApplyAction(bang::kChooseOwnSwapAction);
+    const auto& law = state.Players()[0];
+    Require(law.hand.size() == law_hand + 3 &&
+                law.positions[static_cast<std::size_t>(law.active_position)].character_id ==
+                    id(CH::kTheMarshal) &&
+                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 1,
+            "the elimination finishes after his draws and the Outlaw plays on");
+  }
+  {
+    // Poker Alicia: instead of drawing, take 1 Equipment card from any AC.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = {id(CH::kPokerAlicia), 9};
+    config.starting_decks[0] = DeckWithTop(
+        bang::Side::kLaw, {CN::kBarrel, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+        kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, fillers, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    const int barrel = HandCard(state, 0, CN::kBarrel);
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOpponentActive));
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    Require(state.CurrentPhase() == bang::Phase::kChooseAbility &&
+                HasAction(state, bang::SelectCardAction(barrel)) &&
+                HasAction(state, bang::kSkipOptionalAction),
+            "Poker Alicia may take Equipment from any AC instead of drawing");
+    const auto hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::SelectCardAction(barrel));
+    Require(InHand(state, 0, barrel) && state.Players()[0].hand.size() == hand + 1 &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "she takes the card instead of the usual 2");
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOpponentActive));
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    const auto next_hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::kSkipOptionalAction);
+    Require(state.Players()[0].hand.size() == next_hand + 2 &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "declining draws the usual 2 cards");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5184,6 +5282,7 @@ int main() {
     TestRicochetAndHitResources();
     TestSlap();
     TestRenegadeCharactersResources();
+    TestTheMarshalAndPokerAlicia();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

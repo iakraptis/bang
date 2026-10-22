@@ -475,6 +475,14 @@ std::vector<int> GameState::LegalActions() const {
       for (const int instance : CattleKatieEquipment(decision_player_)) {
         result.push_back(SelectCardAction(instance));
       }
+    } else if (ability == CharacterName::kPokerAlicia) {
+      result.push_back(kSkipOptionalAction);  // draw as usual
+      for (const auto& side : players_) {
+        for (const int instance :
+             side.positions[static_cast<std::size_t>(side.active_position)].equipment) {
+          result.push_back(SelectCardAction(instance));
+        }
+      }
     } else if (ability == CharacterName::kSoundanceKid) {
       if (ability_stage_ == 0) {
         for (const int instance :
@@ -780,6 +788,13 @@ void GameState::ApplyAction(int action_id) {
     } else {
       decision_player_ = turn_player_ = PlayerIndex(Side::kLaw);
       RecordVisibleCharacters();
+      for (int player = 0; player < kSideCount; ++player) {
+        if (LivingCharacterPosition(player, CharacterName::kTheMarshal) >= 0) {
+          // The Marshal entered play: 3 cards on top of the starting hand.
+          BeginDeckDraws(player, 3, DeckDrawResume::kStartTurn);
+          return;
+        }
+      }
       StartTurn();
     }
     return;
@@ -818,6 +833,10 @@ void GameState::ApplyAction(int action_id) {
                pending_ability_ ==
                    static_cast<int>(CharacterName::kPatGarret)) {
       FinishPatGarret(action.card_instance == 1);
+    } else if (phase_ == Phase::kChooseAbility &&
+               pending_ability_ ==
+                   static_cast<int>(CharacterName::kPokerAlicia)) {
+      FinishPokerAlicia(std::nullopt);
     } else if (phase_ == Phase::kChooseRemington) {
       FinishRemingtonChoice(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseCarbine && action.card_instance == 0) {
@@ -841,7 +860,7 @@ void GameState::ApplyAction(int action_id) {
     if (phase_ == Phase::kChooseSwitch) {
       FinishSwitchChoice(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseUnionPacific) {
-      FinishUnionPacificDraw(action.card_instance == 1);
+      FinishDeckDraw(action.card_instance == 1);
     } else {
       FinishShotgunChoice(action.card_instance == 1);
     }
@@ -879,6 +898,9 @@ void GameState::ApplyAction(int action_id) {
       FinishAmbushPick(action.card_instance);
     } else if (phase_ == Phase::kChooseSlap) {
       FinishSlapPick(action.card_instance);
+    } else if (phase_ == Phase::kChooseAbility &&
+               pending_ability_ == static_cast<int>(CharacterName::kPokerAlicia)) {
+      FinishPokerAlicia(action.card_instance);
     } else if (phase_ == Phase::kChooseAbility &&
                pending_ability_ == static_cast<int>(CharacterName::kCattleKatie)) {
       FinishCattleKatie(action.card_instance);
@@ -1091,6 +1113,14 @@ void GameState::AdvanceStartTurn() {
                                   turn_player_, CharacterName::kDaltonBros)
                                   ? 1
                                   : 0);
+      if (IsCharacterAbilityActive(turn_player_, CharacterName::kPokerAlicia) &&
+          PokerAliciaCanTake()) {
+        pending_ability_ = static_cast<int>(CharacterName::kPokerAlicia);
+        pending_draw_count_ = draw_count;
+        decision_player_ = turn_player_;
+        phase_ = Phase::kChooseAbility;
+        return;
+      }
       DrawTurnCards(draw_count);
       return;
     }
@@ -1369,15 +1399,35 @@ void GameState::FinishSwitchSecond(bool accept) {
   phase_ = Phase::kPlay;
 }
 
-void GameState::FinishUnionPacificDraw(bool opponent) {
-  if (union_pacific_remaining_ <= 0) throw std::logic_error("no Union Pacific draw pending");
+void GameState::BeginDeckDraws(int player, int count, DeckDrawResume resume) {
+  deck_draw_player_ = player;
+  deck_draws_remaining_ = count;
+  deck_draw_resume_ = resume;
+  decision_player_ = player;
+  phase_ = Phase::kChooseUnionPacific;
+}
+
+void GameState::FinishDeckDraw(bool opponent) {
+  if (deck_draws_remaining_ <= 0) throw std::logic_error("no deck draw pending");
+  const int player = deck_draw_player_;
   if (opponent) {
-    const auto card = TakeTopCard(OtherPlayer(turn_player_));
-    if (card) players_[static_cast<std::size_t>(turn_player_)].hand.push_back(*card);
+    const auto card = TakeTopCard(OtherPlayer(player));
+    if (card) players_[static_cast<std::size_t>(player)].hand.push_back(*card);
   } else {
-    DrawOne(turn_player_);
+    DrawOne(player);
   }
-  if (--union_pacific_remaining_ > 0) return;
+  if (--deck_draws_remaining_ > 0) return;
+  deck_draw_player_ = -1;
+  switch (deck_draw_resume_) {
+    case DeckDrawResume::kStartTurn:
+      StartTurn();
+      return;
+    case DeckDrawResume::kReplacement:
+      FinishReplacement();
+      return;
+    case DeckDrawResume::kPlay:
+      break;
+  }
   decision_player_ = turn_player_;
   phase_ = Phase::kPlay;
 }
@@ -2113,9 +2163,7 @@ void GameState::ResolveActionEffect(CardName name, Target target) {
     return;
   }
   if (name == CardName::kUnionPacific) {
-    union_pacific_remaining_ = 2;
-    decision_player_ = turn_player_;
-    phase_ = Phase::kChooseUnionPacific;
+    BeginDeckDraws(turn_player_, 2, DeckDrawResume::kPlay);
     return;
   }
   if (name == CardName::kAmbush) {
@@ -3304,6 +3352,40 @@ void GameState::FinishSlap() {
   ActivatePendingHit(hits.front());
 }
 
+bool GameState::PokerAliciaCanTake() const {
+  return std::any_of(players_.begin(), players_.end(), [](const PlayerState& side) {
+    return !side.positions[static_cast<std::size_t>(side.active_position)].equipment.empty();
+  });
+}
+
+void GameState::FinishPokerAlicia(std::optional<int> card_instance) {
+  const int draws = pending_draw_count_;
+  pending_ability_ = -1;
+  ability_stage_ = 0;
+  pending_draw_count_ = 0;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+  if (!card_instance) {
+    DrawTurnCards(draws);
+    return;
+  }
+  // Instead of drawing, take 1 Equipment card from any AC into the hand.
+  for (int owner = 0; owner < kSideCount; ++owner) {
+    auto& side = players_[static_cast<std::size_t>(owner)];
+    auto& equipment = side.positions[static_cast<std::size_t>(side.active_position)].equipment;
+    const auto found = std::find(equipment.begin(), equipment.end(), *card_instance);
+    if (found == equipment.end()) continue;
+    equipment.erase(found);
+    players_[static_cast<std::size_t>(turn_player_)].hand.push_back(*card_instance);
+    MarkHandCardPublic(turn_player_, *card_instance);
+    if (owner != turn_player_) {
+      BeginWildBillReaction(owner, turn_player_, ResumeKind::kPlay, side.active_position);
+    }
+    return;
+  }
+  throw std::logic_error("Poker Alicia's card is not on an AC");
+}
+
 void GameState::BeginRicochet() {
   const int opponent = OtherPlayer(turn_player_);
   ricochet_ = true;
@@ -3663,10 +3745,18 @@ void GameState::FinalizeElimination() {
     state.reserve.pop_back();
     character = {replacement, GetCharacter(replacement).max_life, {}};
     RecordVisibleCharacters();
+    if (replacement == static_cast<int>(CharacterName::kTheMarshal)) {
+      BeginDeckDraws(elimination.player, 3, DeckDrawResume::kReplacement);
+      return;
+    }
   } else {
     state.active_position = survivor_position;
   }
+  FinishReplacement();
+}
 
+void GameState::FinishReplacement() {
+  const auto& elimination = elimination_stack_.back();
   if (elimination.bill_player >= 0 &&
       IsCharacterAbilityActive(elimination.bill_player,
                                CharacterName::kBillTightman)) {

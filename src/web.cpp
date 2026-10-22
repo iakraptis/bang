@@ -266,8 +266,8 @@ std::string PhaseHint(Phase phase) {
       return "Switch swaps up to two sides, each at most once, in the order "
              "you choose.";
     case Phase::kChooseUnionPacific:
-      return "Union Pacific draws 2 cards in total. Take each one from your "
-             "deck or the opponent's.";
+      return "Draw your cards one at a time, each from your deck or the "
+             "opponent's (Union Pacific, The Marshal).";
     case Phase::kChooseAmbush:
       return "Ambush discards 1 card in play from your active character, then "
              "1 from any active character. Either may be skipped.";

@@ -199,6 +199,8 @@ class GameState {
     kElimination,
   };
   enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango, kSidekick };
+  // Where a run of deck draws (Union Pacific, The Marshal) resumes.
+  enum class DeckDrawResume : std::uint8_t { kPlay, kStartTurn, kReplacement };
 
   struct PendingHit {
     int attacker = -1;
@@ -271,7 +273,9 @@ class GameState {
   int extra_bang_allowance_ = 0;
   // Switch: the side that may still swap once the first swap has resolved.
   int switch_second_player_ = -1;
-  int union_pacific_remaining_ = 0;
+  int deck_draw_player_ = -1;
+  int deck_draws_remaining_ = 0;
+  DeckDrawResume deck_draw_resume_ = DeckDrawResume::kPlay;
   // Ambush: 0 picks from your own AC, 1 from any AC.
   int ambush_stage_ = 0;
   bool ricochet_ = false;
@@ -387,7 +391,14 @@ class GameState {
   void FinishSwitchChoice(bool opponent);
   void ContinueSwitch();
   void FinishSwitchSecond(bool accept);
-  void FinishUnionPacificDraw(bool opponent);
+  // Draw `count` cards for `player`, choosing a deck for each (Union
+  // Pacific, The Marshal), then resume where the draws interrupted.
+  void BeginDeckDraws(int player, int count, DeckDrawResume resume);
+  void FinishDeckDraw(bool opponent);
+  // The rest of an elimination once its replacement has entered play.
+  void FinishReplacement();
+  bool PokerAliciaCanTake() const;
+  void FinishPokerAlicia(std::optional<int> card_instance);
   void FinishAmbushPick(std::optional<int> card_instance);
   void UseResource(int card_instance, Target target);
   bool IsSupportedBang(CardName name) const;
