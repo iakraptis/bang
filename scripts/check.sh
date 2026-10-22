@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Pre-PR contribution checkpoint.
 #
-# Runs the same gates CI runs, in the same order, so a green run here means a
-# green run on your pull request. Fast path takes about a minute.
+# The project's full gate; there is no CI, so a green run here is what a pull
+# request is judged on. Fast path takes about a minute.
 #
 #   scripts/check.sh                  engine build + all tests + smoke checks
 #   scripts/check.sh --with-web       also build the static WASM webapp (needs em++)

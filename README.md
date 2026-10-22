@@ -81,7 +81,7 @@ tools/build_static_web.sh web/dist-static policy/static-policy.json
 python3 -m http.server 8765 --directory web/dist-static
 ```
 
-That is exactly what CI deploys to bang.matehegedus.com on every push to `main`.
+That is exactly the bundle deployed to bang.matehegedus.com.
 The bundle also contains `about.html`, a scroll-driven explainer of the game, the
 training system, and the learned meta, with figures generated from the real
 training metrics.
@@ -186,7 +186,7 @@ it an easy one to actually land a change in.
 Two paths, both documented in **[CONTRIBUTING.md](CONTRIBUTING.md)**:
 
 1. **Code contributions.** Run `scripts/check.sh` before you open a PR. It is
-   the same gate CI runs — build, all tests, deterministic simulation, and the
+   the project's full gate — build, all tests, deterministic simulation, and the
    browser-policy smoke test.
 2. **Trained checkpoints.** Trained a stronger agent? There is a documented
    submission workflow: benchmark it against the current champion with paired

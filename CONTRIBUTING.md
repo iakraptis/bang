@@ -16,8 +16,7 @@ There are two contribution paths. Pick the one that matches what you have:
 
 ### The contribution checkpoint
 
-One command, run before you open a PR. It runs the same gates CI runs, in the
-same order:
+One command, run before you open a PR. It is the project's full gate:
 
 ```sh
 scripts/check.sh
@@ -25,7 +24,7 @@ scripts/check.sh
 
 That covers the engine build, all native/web/data tests, a deterministic
 simulation, and the browser-policy smoke test — about a minute on a normal
-laptop. If it is green, CI will be green.
+laptop. There is no CI, so this run is the gate.
 
 Touched something bigger? Add the matching flag:
 
@@ -43,9 +42,8 @@ Touched something bigger? Add the matching flag:
 3. Run `scripts/check.sh` (plus flags).
 4. Open a PR and fill in the template. Paste the last lines of the check output.
 
-CI runs three jobs on every PR — `engine`, `static-web`, `training` — and all
-three must pass. Deployment to production only happens on push to `main`, never
-from a PR.
+There is no CI: the check output in the PR is the evidence the change passes.
+Deployment to production is manual (see the README's static web build).
 
 ### Where tests live
 
@@ -94,8 +92,8 @@ The [known limitations](README.md#known-limitations) each make a solid PR:
 ## Checkpoint contributions
 
 If you trained an agent that beats the current champion, you can make it the one
-the live site plays. `policy/static-policy.json` is the deployed policy: CI bakes
-it into the WASM bundle on every push to `main`.
+the live site plays. `policy/static-policy.json` is the deployed policy: the static web build
+(`tools/build_static_web.sh`) bakes it into the WASM bundle.
 
 Checkpoints (`.pt` files) are **not** committed — only the exported browser
 policy, which is a single JSON file.
