@@ -1577,6 +1577,99 @@ void TestTheMarshalAndPokerAlicia() {
   }
 }
 
+void TestJimLonghairAndMysticMaid() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const auto make = [&](std::vector<int> law_roster, std::vector<int> outlaw_roster,
+                        std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = law_roster;
+    config.character_rosters[1] = outlaw_roster;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed,
+                                CN::kMissed, CN::kMissed, CN::kMissed};
+  const auto active_id = [](const bang::GameState& state, int player) {
+    const auto& side = state.Players()[static_cast<std::size_t>(player)];
+    return side.positions[static_cast<std::size_t>(side.active_position)].character_id;
+  };
+  {
+    // Jim Longhair: when his side swaps, he may swap the opponent's too.
+    auto state = make({1, 9}, {id(CH::kJimLonghair), 16}, fillers, fillers);
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::kSwapAction);
+    Require(state.CurrentPhase() == bang::Phase::kChooseAbility && state.CurrentPlayer() == 1 &&
+                HasAction(state, bang::kAcceptOptionalAction),
+            "Jim Longhair offers to swap the opponent");
+    state.ApplyAction(bang::kAcceptOptionalAction);
+    Require(active_id(state, 0) == 9 && state.CurrentPhase() == bang::Phase::kPlay &&
+                state.CurrentPlayer() == 1,
+            "the opponent's characters swapped too");
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::kSwapAction);
+    state.ApplyAction(bang::kSkipOptionalAction);
+    Require(active_id(state, 0) == 9 && active_id(state, 1) == id(CH::kJimLonghair),
+            "declining leaves the opponent in place");
+  }
+  {
+    // A Switch swapping Jim's side first: his swap of the Law replaces the
+    // Switch's second swap, so no side swaps twice.
+    auto state = make({1, 9}, {id(CH::kJimLonghair), 16},
+                      {CN::kSwitch, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      fillers);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSwitch), bang::Target::kOwnActive));
+    state.ApplyAction(bang::kChooseOpponentSwapAction);
+    Require(state.CurrentPhase() == bang::Phase::kChooseAbility && state.CurrentPlayer() == 1,
+            "Jim Longhair answers the Switch");
+    state.ApplyAction(bang::kAcceptOptionalAction);
+    Require(active_id(state, 0) == 9 && active_id(state, 1) == 16 &&
+                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 0,
+            "both sides swapped once and the Law plays on");
+  }
+  {
+    // Mystic Maid: 1 of her Equipment as a Colt (the turn's BANG!), then draw 1.
+    auto state = make({1, id(CH::kMysticMaid)}, {12, 16},
+                      {CN::kBarrel, CN::kHat, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int barrel = HandCard(state, 0, CN::kBarrel);
+    const int hat = HandCard(state, 0, CN::kHat);
+    const int colt = HandCard(state, 0, CN::kColt);
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    Require(HasAction(state, bang::PlayAsColtAction(barrel, bang::Target::kOpponentActive)),
+            "Mystic Maid may discard her Equipment as a Colt");
+    const auto hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::PlayAsColtAction(barrel, bang::Target::kOpponentActive));
+    Require(state.CurrentPhase() == bang::Phase::kRespondToHit &&
+                state.Players()[0].hand.size() == hand + 1,
+            "the Colt comes with 1 card");
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(!HasAction(state, bang::PlayCardAction(colt, bang::Target::kOpponentActive)),
+            "the Colt was the turn's BANG!");
+    EndCurrentTurnKeeping(state, {CN::kColt});
+    const auto life = state.Players()[0].positions[1].life;
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kColt)));
+    Require(HasAction(state, bang::SelectCardAction(hat)) &&
+                HasAction(state, bang::AvoidHitAction(hat)),
+            "she may also discard Equipment as a Missed!");
+    const auto law_hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::SelectCardAction(hat));
+    Require(state.Players()[0].positions[1].life == life &&
+                state.Players()[0].hand.size() == law_hand + 1 &&
+                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 1,
+            "the hit is avoided and she draws 1");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5283,6 +5376,7 @@ int main() {
     TestSlap();
     TestRenegadeCharactersResources();
     TestTheMarshalAndPokerAlicia();
+    TestJimLonghairAndMysticMaid();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

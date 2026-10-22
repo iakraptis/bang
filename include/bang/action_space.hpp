@@ -48,8 +48,8 @@ inline constexpr int kCardKindCount = 4;
 inline constexpr int kPhaseCapacity = 32;
 // Barrel, Dynamite, Rattlesnake, Whiskey (Sid Curry has a slot of its own).
 inline constexpr int kRevealReasonInputs = 4;
-// Tom Thorn, Clock, Jango, Sidekick.
-inline constexpr int kMovementTriggerInputs = 4;
+// Tom Thorn, Clock, Jango, Sidekick, Jim Longhair.
+inline constexpr int kMovementTriggerInputs = 5;
 static_assert(static_cast<int>(ActionKind::kUseResource) + 1 == kActionKindCount);
 static_assert(static_cast<int>(CardKind::kResource) + 1 == kCardKindCount);
 

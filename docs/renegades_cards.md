@@ -134,6 +134,12 @@ Per card:
   in play; the COLT counts as the turn's BANG!; usable against Indians!,
   Indian Chief, etc.
 - **Poker Alicia**: replaces phase 1 (Draw).
+- **Jim Longhair** (implementation): his swap of the opponent happens after
+  the other swap triggers and fires that side's own triggers. During a
+  Switch it counts as the Switch's swap of that side, so no side swaps twice.
+- **Mystic Maid** (implementation): any of her Equipment, Resources included,
+  answers a hit as ⊘ or ⊛ (not Sharps), a Duel or a Ricochet, or is played as
+  the turn's Colt; she draws 1 card each time.
 - **The Marshal**: in the starting pair, the 3 cards come on top of the starting
   hand; each draw may come from any deck, chosen after seeing the previous one.
 
@@ -180,7 +186,8 @@ Renegade characters are dealt in Reinforcements but have no abilities yet.
 | Sharps; Equipment Sidekick, Spurs | Done, with tests |
 | Ricochet; hit Resources answering Duel and Indians! | Done, with tests |
 | Characters: Big Steve, Charlie Basset, Hottie Delou, King Fishers, The Marshal, Poker Alicia | Done, with tests |
-| Other characters | To do |
+| Characters: Jim Longhair, Mystic Maid | Done, with tests |
+| Other characters (El Chindi, Hick Addams, Dutch Harry, Kitty Leroy) | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 
 ## Rules decisions

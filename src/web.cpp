@@ -399,6 +399,16 @@ AbilityPrompt AbilityPromptFor(const GameState& state) {
       prompt.skip = "Skip the draw";
       prompt.skip_detail = "Let the swap pass without drawing";
       break;
+    case CharacterName::kJimLonghair:
+      prompt.label = "Jim Longhair: swap the opponent too?";
+      prompt.hint =
+          "Your active and reserve characters just swapped, so Jim Longhair "
+          "may swap the opponent's active and reserve characters as well.";
+      prompt.accept = "Swap the opponent";
+      prompt.accept_detail = "Their reserve character becomes active";
+      prompt.skip = "Leave them";
+      prompt.skip_detail = "Only your side moves";
+      break;
     case CharacterName::kPatGarret:
       prompt.label = "Pat Garret: raid the opponent's deck?";
       prompt.hint =
@@ -706,6 +716,12 @@ JsonValue ActionJson(const GameState& state, int action_id) {
                   ? "Play " + std::string(card.display_name) + " as Colt"
                   : "Play " + std::string(card.display_name);
       detail = "Target: " + target;
+      const auto& hand = state.Players()[static_cast<std::size_t>(state.CurrentPlayer())].hand;
+      if (action.kind == ActionKind::kPlayAsColt &&
+          std::find(hand.begin(), hand.end(), action.card_instance) == hand.end()) {
+        label = "Mystic Maid: discard " + std::string(card.display_name) + " as Colt";
+        detail += ", then draw 1";
+      }
       // Pearl Hat replays a card off the discard pile rather than playing one
       // out of hand — say so instead of pretending she holds it.
       if (!ability.label.empty()) {
@@ -727,6 +743,9 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       if (action.kind == ActionKind::kDiscardCard) label = "Discard " + std::string(card.display_name);
       if (action.kind == ActionKind::kAvoidHit) label = "Respond with " + std::string(card.display_name);
       if (action.kind == ActionKind::kSelectCard) label = "Choose " + std::string(card.display_name);
+      if (action.kind == ActionKind::kSelectCard && state.CurrentPhase() == Phase::kRespondToHit) {
+        label = "Mystic Maid: discard " + std::string(card.display_name);
+      }
       if (action.kind != ActionKind::kReloadCard &&
           action.kind != ActionKind::kAvoidHit) {
         detail = ability.pick_detail;

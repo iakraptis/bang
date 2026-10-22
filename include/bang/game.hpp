@@ -198,7 +198,8 @@ class GameState {
     kDamageReaction,
     kElimination,
   };
-  enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango, kSidekick };
+  enum class MovementTrigger : std::uint8_t {
+    kTomThorn, kClock, kJango, kSidekick, kJimLonghair};
   // Where a run of deck draws (Union Pacific, The Marshal) resumes.
   enum class DeckDrawResume : std::uint8_t { kPlay, kStartTurn, kReplacement };
 
@@ -273,6 +274,8 @@ class GameState {
   int extra_bang_allowance_ = 0;
   // Switch: the side that may still swap once the first swap has resolved.
   int switch_second_player_ = -1;
+  // The side a Switch already swapped: Jim Longhair cannot swap it again.
+  int jim_longhair_blocked_ = -1;
   int deck_draw_player_ = -1;
   int deck_draws_remaining_ = 0;
   DeckDrawResume deck_draw_resume_ = DeckDrawResume::kPlay;
@@ -416,6 +419,10 @@ class GameState {
   std::vector<int> PearlHatActionsFor(int source_instance) const;
   bool CanUsePearlHat() const;
   void FinishJango(bool draw);
+  void FinishJimLonghair(bool swap);
+  // Mystic Maid's Equipment while she is the active character.
+  std::vector<int> MysticMaidEquipment(int player) const;
+  void FinishMysticMaidAvoid(int card_instance);
   void CompleteActivatedAbility(CharacterName character);
   void ResolveAction(int card_instance, Target target);
   void ResolveActionEffect(CardName name, Target target);

@@ -316,6 +316,15 @@ std::vector<int> GameState::LegalActions() const {
                   .active_position
             : effect_target_position_;
     const auto& side = players_[static_cast<std::size_t>(decision_player_)];
+    // Mystic Maid's Equipment counts as the ⊛ (Duel) or ⊘ (Ricochet) card.
+    const auto add_mystic_maid = [&] {
+      for (const int instance : MysticMaidEquipment(decision_player_)) {
+        const int action = DiscardCardAction(instance);
+        if (std::find(result.begin(), result.end(), action) == result.end()) {
+          result.push_back(action);
+        }
+      }
+    };
     if (ricochet_) {
       // Ricochet: avoid cards only, from the hand, plus Hat or an avoid
       // Resource on the active character; never Barrel or abilities.
@@ -333,6 +342,7 @@ std::vector<int> GameState::LegalActions() const {
           result.push_back(DiscardCardAction(instance));
         }
       }
+      add_mystic_maid();
       return result;
     }
     for (const int instance : side.hand) {
@@ -343,6 +353,7 @@ std::vector<int> GameState::LegalActions() const {
     for (const int instance : HitResourcesOnActive(decision_player_)) {
       result.push_back(DiscardCardAction(instance));
     }
+    add_mystic_maid();
     return result;
   }
   if (phase_ == Phase::kChooseWagonDiscard) {
@@ -468,6 +479,7 @@ std::vector<int> GameState::LegalActions() const {
     }
     const auto ability = static_cast<CharacterName>(pending_ability_);
     if (ability == CharacterName::kJango ||
+        ability == CharacterName::kJimLonghair ||
         ability == CharacterName::kPatGarret) {
       result.push_back(kSkipOptionalAction);
       result.push_back(kAcceptOptionalAction);
@@ -534,6 +546,11 @@ std::vector<int> GameState::LegalActions() const {
         pending_hit_->source == CardName::kIndianChief) {
       for (const int instance : HitResourcesOnActive(pending_hit_->target)) {
         result.push_back(AvoidHitAction(instance));
+      }
+    }
+    if (pending_hit_->source != CardName::kSharps) {
+      for (const int instance : MysticMaidEquipment(pending_hit_->target)) {
+        result.push_back(SelectCardAction(instance));
       }
     }
     // Hit cards only, or Sharps: no abilities or Equipment can help.
@@ -728,6 +745,22 @@ std::vector<int> GameState::LegalActions() const {
       }
     }
   }
+  if (can_play_bang) {
+    // Mystic Maid: discard 1 of her Equipment as a Colt (the turn's BANG!).
+    const int opponent = OtherPlayer(decision_player_);
+    const auto& opponent_state = players_[static_cast<std::size_t>(opponent)];
+    const bool opponent_rear_alive =
+        opponent_state.positions[static_cast<std::size_t>(1 - opponent_state.active_position)]
+            .life > 0;
+    for (const int instance : MysticMaidEquipment(decision_player_)) {
+      result.push_back(PlayAsColtAction(instance, Target::kOpponentActive));
+      const bool scope = HasActiveEquipment(decision_player_, CardName::kScope) &&
+                         GetCardInstance(instance).name != CardName::kScope;
+      if (opponent_rear_alive && (jack_active || scope)) {
+        result.push_back(PlayAsColtAction(instance, Target::kOpponentRearguard));
+      }
+    }
+  }
   if (!ability_used_this_turn_[static_cast<std::size_t>(CharacterName::kBabeLeroy)] &&
       IsCharacterAbilityActive(decision_player_, CharacterName::kBabeLeroy) &&
       player.hand.empty()) {
@@ -830,6 +863,9 @@ void GameState::ApplyAction(int action_id) {
                pending_ability_ == static_cast<int>(CharacterName::kJango)) {
       FinishJango(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseAbility &&
+               pending_ability_ == static_cast<int>(CharacterName::kJimLonghair)) {
+      FinishJimLonghair(action.card_instance == 1);
+    } else if (phase_ == Phase::kChooseAbility &&
                pending_ability_ ==
                    static_cast<int>(CharacterName::kPatGarret)) {
       FinishPatGarret(action.card_instance == 1);
@@ -898,6 +934,8 @@ void GameState::ApplyAction(int action_id) {
       FinishAmbushPick(action.card_instance);
     } else if (phase_ == Phase::kChooseSlap) {
       FinishSlapPick(action.card_instance);
+    } else if (phase_ == Phase::kRespondToHit) {
+      FinishMysticMaidAvoid(action.card_instance);
     } else if (phase_ == Phase::kChooseAbility &&
                pending_ability_ == static_cast<int>(CharacterName::kPokerAlicia)) {
       FinishPokerAlicia(action.card_instance);
@@ -1277,6 +1315,8 @@ bool GameState::SwapCharacters(int player, bool voluntary, ResumeKind resume_kin
       IsCharacterAbilityActive(opposing_player, CharacterName::kJango);
   // Sidekick fires when its character becomes active.
   const bool sidekick_triggers = HasEquipment(player, destination, CardName::kSidekick);
+  const bool jim_triggers = IsCharacterAbilityActive(player, CharacterName::kJimLonghair) &&
+                            jim_longhair_blocked_ != opposing_player;
 
   movement_mover_ = player;
   movement_resume_kind_ = resume_kind;
@@ -1292,6 +1332,8 @@ bool GameState::SwapCharacters(int player, bool voluntary, ResumeKind resume_kin
   }
   // After the Clock: with Barrel and Clock on the target, the Clock comes first.
   if (sidekick_triggers) ordered.push_back(MovementTrigger::kSidekick);
+  // Last, so the opponent's swap starts a movement of its own.
+  if (jim_triggers) ordered.push_back(MovementTrigger::kJimLonghair);
   std::reverse(ordered.begin(), ordered.end());
   movement_triggers_ = std::move(ordered);
   return AdvanceMovementTriggers(false);
@@ -1317,6 +1359,17 @@ bool GameState::AdvanceMovementTriggers(bool resume_when_complete) {
                      turn_player_, CardName::kSidekick, false, ResponseKind::kAnyHandCard};
       hit.resume_kind = ResumeKind::kMovement;
       ActivatePendingHit(hit);
+      return true;
+    }
+    if (trigger == MovementTrigger::kJimLonghair) {
+      if (IsTerminal() || !CanSwapSide(opposing_player) ||
+          !IsCharacterAbilityActive(movement_mover_, CharacterName::kJimLonghair)) {
+        continue;
+      }
+      pending_ability_ = static_cast<int>(CharacterName::kJimLonghair);
+      ability_stage_ = 0;
+      decision_player_ = movement_mover_;
+      phase_ = Phase::kChooseAbility;
       return true;
     }
     if (trigger == MovementTrigger::kJango) {
@@ -1394,7 +1447,12 @@ void GameState::ContinueSwitch() {
 void GameState::FinishSwitchSecond(bool accept) {
   const int second = switch_second_player_;
   switch_second_player_ = -1;
-  if (accept && CanSwapSide(second) && SwapCharacters(second, false)) return;
+  if (accept && CanSwapSide(second)) {
+    jim_longhair_blocked_ = OtherPlayer(second);
+    const bool paused = SwapCharacters(second, false);
+    jim_longhair_blocked_ = -1;
+    if (paused) return;
+  }
   decision_player_ = turn_player_;
   phase_ = Phase::kPlay;
 }
@@ -1826,15 +1884,24 @@ void GameState::ResolveBang(int card_instance, Target target) {
 
 void GameState::ResolveAsColt(int card_instance, Target target) {
   if (!HasCardInHand(turn_player_, card_instance)) {
-    throw std::logic_error("transformed Colt card is not in hand");
+    const auto equipment = MysticMaidEquipment(turn_player_);
+    if (std::find(equipment.begin(), equipment.end(), card_instance) == equipment.end()) {
+      throw std::logic_error("transformed Colt card is not in hand");
+    }
+    // Mystic Maid discards 1 of her Equipment for a Colt, then draws 1.
+    RemoveEquipment(turn_player_,
+                    players_[static_cast<std::size_t>(turn_player_)].active_position,
+                    card_instance);
+    DrawOne(turn_player_);
+  } else {
+    const CardName original = GetCardInstance(card_instance).name;
+    const bool allowed =
+        IsCharacterAbilityActive(turn_player_, CharacterName::kTocoRamirez) ||
+        (IsCharacterAbilityActive(turn_player_, CharacterName::kAnnieOakey) &&
+         original == CardName::kMissed);
+    if (!allowed) throw std::logic_error("no active ability can transform this card");
+    DiscardFromHand(turn_player_, card_instance);
   }
-  const CardName original = GetCardInstance(card_instance).name;
-  const bool allowed =
-      IsCharacterAbilityActive(turn_player_, CharacterName::kTocoRamirez) ||
-      (IsCharacterAbilityActive(turn_player_, CharacterName::kAnnieOakey) &&
-       original == CardName::kMissed);
-  if (!allowed) throw std::logic_error("no active ability can transform this card");
-  DiscardFromHand(turn_player_, card_instance);
   if (!HasActiveEquipment(turn_player_, CardName::kGunBelt)) ++bang_cards_played_;
   const auto [target_player, target_position] = ResolveTarget(turn_player_, target);
   pending_hit_ = PendingHit{turn_player_, target_player, target_position,
@@ -2058,6 +2125,52 @@ void GameState::FinishJango(bool draw) {
   AdvanceMovementTriggers(true);
 }
 
+void GameState::FinishJimLonghair(bool swap) {
+  if (phase_ != Phase::kChooseAbility ||
+      pending_ability_ != static_cast<int>(CharacterName::kJimLonghair) ||
+      movement_mover_ < 0) {
+    throw std::logic_error("there is no pending Jim Longhair choice");
+  }
+  pending_ability_ = -1;
+  ability_stage_ = 0;
+  const int opponent = OtherPlayer(movement_mover_);
+  if (!swap || !CanSwapSide(opponent)) {
+    AdvanceMovementTriggers(true);
+    return;
+  }
+  // The opponent's side has now swapped: a Switch does not swap it again.
+  if (switch_second_player_ == opponent) switch_second_player_ = -1;
+  const ResumeKind resume = movement_resume_kind_;
+  movement_mover_ = -1;
+  movement_resume_kind_ = ResumeKind::kPlay;
+  if (SwapCharacters(opponent, false, resume)) return;
+  movement_mover_ = opponent;
+  movement_resume_kind_ = resume;
+  ResumeAfterMovement();
+}
+
+std::vector<int> GameState::MysticMaidEquipment(int player) const {
+  if (!IsCharacterAbilityActive(player, CharacterName::kMysticMaid)) return {};
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  return state.positions[static_cast<std::size_t>(state.active_position)].equipment;
+}
+
+void GameState::FinishMysticMaidAvoid(int card_instance) {
+  if (!pending_hit_ || pending_hit_->source == CardName::kSharps) {
+    throw std::logic_error("Mystic Maid cannot answer this hit");
+  }
+  const int owner = pending_hit_->target;
+  const auto equipment = MysticMaidEquipment(owner);
+  if (std::find(equipment.begin(), equipment.end(), card_instance) == equipment.end()) {
+    throw std::logic_error("Mystic Maid's card is not in play on her");
+  }
+  // Her Equipment counts as a Missed! or a Colt, whichever the hit asks for.
+  RemoveEquipment(owner, players_[static_cast<std::size_t>(owner)].active_position,
+                  card_instance);
+  DrawOne(owner);
+  RecordAvoid(false);
+}
+
 void GameState::CompleteActivatedAbility(CharacterName character) {
   ability_used_this_turn_[static_cast<std::size_t>(character)] = true;
   pending_ability_ = -1;
@@ -2227,10 +2340,14 @@ void GameState::FinishDuelResponse(std::optional<int> card_instance) {
       if (!fits) throw std::logic_error("Duel response card does not fit");
       DiscardFromHand(decision_player_, *card_instance);
     } else {
-      // From play: a hit Resource (Duel), or Hat / an avoid Resource (Ricochet).
+      // From play: a hit Resource (Duel), Hat / an avoid Resource (Ricochet),
+      // or any of Mystic Maid's Equipment, which then draws her 1 card.
       const int active =
           players_[static_cast<std::size_t>(decision_player_)].active_position;
       RemoveEquipment(decision_player_, active, *card_instance);
+      if (IsCharacterAbilityActive(decision_player_, CharacterName::kMysticMaid)) {
+        DrawOne(decision_player_);
+      }
     }
     decision_player_ = OtherPlayer(decision_player_);
     return;
