@@ -120,6 +120,8 @@ class GameState {
 
   // Which cards and characters this game deals.
   GameMode Mode() const { return config_.mode; }
+  // The Duel phase is resolving a Ricochet (avoid cards instead of hit cards).
+  bool RicochetActive() const { return ricochet_; }
 
   int CurrentPlayer() const;
   int TurnPlayer() const;
@@ -216,6 +218,10 @@ class GameState {
     int source_instance = -1;
     // A Feint helped avoid this hit.
     bool feint = false;
+    // The hit was not avoided (Howitzer then also hits the rearguard).
+    bool landed = false;
+    // A second hit a card already dealt (Double Barrel, Howitzer).
+    bool follow_up = false;
   };
 
   struct PendingReveal {
@@ -267,6 +273,7 @@ class GameState {
   int union_pacific_remaining_ = 0;
   // Ambush: 0 picks from your own AC, 1 from any AC.
   int ambush_stage_ = 0;
+  bool ricochet_ = false;
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -358,6 +365,12 @@ class GameState {
   // Spurs: an active character whose owner holds no cards cannot be the
   // target of hits (Sharps ignores it).
   bool SpursShield(int player, int position) const;
+  // Spurs stops hits, but not Indians!-style "discard or lose life" effects.
+  bool BlockedBySpurs(const PendingHit& hit) const;
+  // Hit Resources on `player`'s AC can be thrown away to answer Duel or
+  // Indians!, even on the turn they entered play.
+  std::vector<int> HitResourcesOnActive(int player) const;
+  void BeginRicochet();
   void FinishSwitchChoice(bool opponent);
   void ContinueSwitch();
   void FinishSwitchSecond(bool accept);

@@ -643,8 +643,8 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       const bool accept = action.card_instance == 1;
       result["accept"] = accept;
       if (state.CurrentPhase() == Phase::kDuelResponse && !accept) {
-        label = "Concede the Duel";
-        detail = "Lose 1 life";
+        label = state.RicochetActive() ? "Stop the Ricochet" : "Concede the Duel";
+        detail = "Your active character loses 1 life";
       } else if (state.CurrentPhase() == Phase::kChooseSwitch) {
         label = accept ? "Swap the other side too" : "Stop here";
         detail = accept ? "Switch's second swap" : "Keep the other side as it is";

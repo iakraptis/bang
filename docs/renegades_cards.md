@@ -174,10 +174,11 @@ Reinforcements but cannot be played yet.
 | Gold Pan, Lucky Penny, Buffalo Rifle, Pardner | Done, with tests |
 | BANG!: Lightning, Savage, Spencer, Walker, Whitney | Done, with tests |
 | Avoid Actions: Agility, Feint | Done, with tests |
-| Other Resources: Double Barrel, Howitzer, Indian Chief, Slap | To do |
+| Resources: Double Barrel, Howitzer, Indian Chief | Done, with tests |
+| Resource: Slap | To do |
 | Actions: Ambush, Switch, Union Pacific, Whiskey | Done, with tests |
 | Sharps; Equipment Sidekick, Spurs | Done, with tests |
-| Ricochet | To do |
+| Ricochet; hit Resources answering Duel and Indians! | Done, with tests |
 | Characters | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 

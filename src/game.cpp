@@ -290,11 +290,33 @@ std::vector<int> GameState::LegalActions() const {
             ? players_[static_cast<std::size_t>(decision_player_)]
                   .active_position
             : effect_target_position_;
-    const auto& hand = players_[static_cast<std::size_t>(decision_player_)].hand;
-    for (const int instance : hand) {
+    const auto& side = players_[static_cast<std::size_t>(decision_player_)];
+    if (ricochet_) {
+      // Ricochet: avoid cards only, from the hand, plus Hat or an avoid
+      // Resource on the active character; never Barrel or abilities.
+      for (const int instance : side.hand) {
+        const auto& card = GetCard(GetCardInstance(instance).name);
+        if (card.has_avoid && card.kind != CardKind::kResource) {
+          result.push_back(DiscardCardAction(instance));
+        }
+      }
+      for (const int instance :
+           side.positions[static_cast<std::size_t>(side.active_position)].equipment) {
+        const auto& card = GetCard(GetCardInstance(instance).name);
+        if (card.name == CardName::kHat ||
+            (card.kind == CardKind::kResource && card.has_avoid)) {
+          result.push_back(DiscardCardAction(instance));
+        }
+      }
+      return result;
+    }
+    for (const int instance : side.hand) {
       if (CanProvideHit(decision_player_, position, instance)) {
         result.push_back(DiscardCardAction(instance));
       }
+    }
+    for (const int instance : HitResourcesOnActive(decision_player_)) {
+      result.push_back(DiscardCardAction(instance));
     }
     return result;
   }
@@ -475,6 +497,12 @@ std::vector<int> GameState::LegalActions() const {
         result.push_back(AvoidHitAction(instance));
       }
     }
+    if (pending_hit_->source == CardName::kIndians ||
+        pending_hit_->source == CardName::kIndianChief) {
+      for (const int instance : HitResourcesOnActive(pending_hit_->target)) {
+        result.push_back(AvoidHitAction(instance));
+      }
+    }
     // Hit cards only, or Sharps: no abilities or Equipment can help.
     if (needs_additional_card ||
         pending_hit_->response == ResponseKind::kHitCard ||
@@ -600,7 +628,8 @@ std::vector<int> GameState::LegalActions() const {
         }
         if (any_equipment) result.push_back(PlayCardAction(instance, Target::kOwnActive));
       } else if (card.name == CardName::kUnionPacific ||
-                 card.name == CardName::kWhiskey) {
+                 card.name == CardName::kWhiskey ||
+                 card.name == CardName::kRicochet) {
         result.push_back(PlayCardAction(instance, Target::kOwnActive));
       } else if (card.name == CardName::kGatling ||
                  card.name == CardName::kGeneralStore ||
@@ -658,8 +687,11 @@ std::vector<int> GameState::LegalActions() const {
         if (!discard_.empty()) result.push_back(UseResourceAction(instance, Target::kOwnActive));
       } else if (name == CardName::kBuffaloRifle) {
         shoot(true);
-      } else if (name == CardName::kPardner) {
+      } else if (name == CardName::kPardner || name == CardName::kDoubleBarrel ||
+                 name == CardName::kHowitzer) {
         shoot(jack_active || HasActiveEquipment(decision_player_, CardName::kScope));
+      } else if (name == CardName::kIndianChief) {
+        result.push_back(UseResourceAction(instance, Target::kOwnActive));
       }
     }
   }
@@ -944,8 +976,10 @@ void GameState::ApplyAction(int action_id) {
       } else if (name == CardName::kBarrel) {
         BeginBarrelReveal(action.card_instance);
       } else if (GetCard(name).kind == CardKind::kResource) {
+        // Resources work from the active character, whichever one was hit.
         const int owner = pending_hit_->target;
-        RemoveEquipment(owner, pending_hit_->target_position, action.card_instance);
+        RemoveEquipment(owner, players_[static_cast<std::size_t>(owner)].active_position,
+                        action.card_instance);
         // Lucky Penny's card comes immediately, so it can answer later hits.
         if (name == CardName::kLuckyPenny) DrawOne(owner);
         RecordAvoid(false);
@@ -1502,7 +1536,8 @@ bool GameState::IsSupportedAction(CardName name) const {
          name == CardName::kWagon || name == CardName::kWater ||
          // Renegades
          name == CardName::kAmbush || name == CardName::kSwitch ||
-         name == CardName::kUnionPacific || name == CardName::kWhiskey;
+         name == CardName::kUnionPacific || name == CardName::kWhiskey ||
+         name == CardName::kRicochet;
 }
 
 void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
@@ -1538,7 +1573,9 @@ void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
 
 bool GameState::IsSupportedResource(CardName name) const {
   return name == CardName::kBuffaloRifle || name == CardName::kGoldPan ||
-         name == CardName::kLuckyPenny || name == CardName::kPardner;
+         name == CardName::kLuckyPenny || name == CardName::kPardner ||
+         name == CardName::kDoubleBarrel || name == CardName::kHowitzer ||
+         name == CardName::kIndianChief;
 }
 
 bool GameState::CanUseResource(int player, int card_instance) const {
@@ -1578,7 +1615,22 @@ void GameState::UseResource(int card_instance, Target target) {
     // Drawn immediately, before the opponent reacts.
     DrawOne(turn_player_);
   }
-  if (name == CardName::kBuffaloRifle || name == CardName::kPardner) {
+  if (name == CardName::kIndianChief) {
+    // Indians! against the opponent's characters only, AC first.
+    const int opponent = OtherPlayer(turn_player_);
+    const auto& side = players_[static_cast<std::size_t>(opponent)];
+    std::vector<PendingHit> hits;
+    for (const int position : {side.active_position, 1 - side.active_position}) {
+      if (side.positions[static_cast<std::size_t>(position)].life > 0) {
+        hits.push_back({turn_player_, opponent, position, turn_player_, name, false,
+                        ResponseKind::kHitCard});
+      }
+    }
+    BeginHitSequence(std::move(hits), turn_player_);
+    return;
+  }
+  if (name == CardName::kBuffaloRifle || name == CardName::kPardner ||
+      name == CardName::kDoubleBarrel || name == CardName::kHowitzer) {
     const auto [target_player, target_position] = ResolveTarget(turn_player_, target);
     pending_hit_ = PendingHit{turn_player_, target_player, target_position, turn_player_,
                               name, false, ResponseKind::kAvoid, 1};
@@ -1966,6 +2018,10 @@ void GameState::ResolveActionEffect(CardName name, Target target) {
     }
     return;
   }
+  if (name == CardName::kRicochet) {
+    BeginRicochet();
+    return;
+  }
   if (name == CardName::kSwitch) {
     switch_second_player_ = -1;
     decision_player_ = turn_player_;
@@ -2031,10 +2087,19 @@ void GameState::FinishDuelResponse(std::optional<int> card_instance) {
             ? players_[static_cast<std::size_t>(decision_player_)]
                   .active_position
             : effect_target_position_;
-    if (!CanProvideHit(decision_player_, position, *card_instance)) {
-      throw std::logic_error("Duel response is not a hit card");
+    const auto& card = GetCard(GetCardInstance(*card_instance).name);
+    if (HasCardInHand(decision_player_, *card_instance)) {
+      const bool fits = ricochet_
+                            ? card.has_avoid && card.kind != CardKind::kResource
+                            : CanProvideHit(decision_player_, position, *card_instance);
+      if (!fits) throw std::logic_error("Duel response card does not fit");
+      DiscardFromHand(decision_player_, *card_instance);
+    } else {
+      // From play: a hit Resource (Duel), or Hat / an avoid Resource (Ricochet).
+      const int active =
+          players_[static_cast<std::size_t>(decision_player_)].active_position;
+      RemoveEquipment(decision_player_, active, *card_instance);
     }
-    DiscardFromHand(decision_player_, *card_instance);
     decision_player_ = OtherPlayer(decision_player_);
     return;
   }
@@ -2046,7 +2111,9 @@ void GameState::FinishDuelResponse(std::optional<int> card_instance) {
   const int resume = effect_actor_;
   effect_actor_ = -1;
   effect_target_position_ = -1;
-  PendingHit continuation{-1, loser, position, resume, CardName::kColt, false};
+  const CardName source = ricochet_ ? CardName::kRicochet : CardName::kColt;
+  ricochet_ = false;
+  PendingHit continuation{-1, loser, position, resume, source, false};
   BeginDamage(loser, position, 1, OtherPlayer(loser), continuation);
 }
 
@@ -2303,6 +2370,22 @@ void GameState::RecordAvoid(bool return_fire, int counter_character) {
   const PendingHit original = *pending_hit_;
   pending_hit_.reset();
   ApplyAvoidedCardMoves(original);
+  if (original.source == CardName::kDoubleBarrel && !original.follow_up) {
+    const int other = 1 - original.target_position;
+    if (players_[static_cast<std::size_t>(original.target)]
+            .positions[static_cast<std::size_t>(other)].life > 0) {
+      PendingHit follow = original;
+      follow.target_position = other;
+      follow.follow_up = true;
+      follow.avoids_played = 0;
+      follow.barrel_attempted = false;
+      follow.sid_attempted = false;
+      follow.return_fire_pending = false;
+      follow.counter_character = -1;
+      follow.feint = false;
+      continuation_hits_.push_back(follow);
+    }
+  }
   if (!original.return_fire_pending && original.counter_character < 0) {
     ResolveAvoidedHit(original, std::nullopt);
     return;
@@ -2577,6 +2660,17 @@ void GameState::AdvanceHitSequence() {
 }
 
 void GameState::ContinueAfterResolvedHit(const PendingHit& hit) {
+  if (hit.source == CardName::kHowitzer && hit.landed && !hit.follow_up && !IsTerminal()) {
+    const auto& side = players_[static_cast<std::size_t>(hit.target)];
+    const int rear = 1 - side.active_position;
+    if (side.positions[static_cast<std::size_t>(rear)].life > 0) {
+      PendingHit follow = hit;
+      follow.target_position = rear;
+      follow.follow_up = true;
+      BeginDamage(hit.target, rear, 1, hit.attacker, follow);
+      return;
+    }
+  }
   if (!continuation_hits_.empty()) {
     PendingHit next = continuation_hits_.back();
     continuation_hits_.pop_back();
@@ -2651,8 +2745,9 @@ bool GameState::BeginWildBillReaction(
 
 void GameState::ResolveHit() {
   if (!pending_hit_) throw std::logic_error("there is no pending hit");
-  const PendingHit hit = *pending_hit_;
+  PendingHit hit = *pending_hit_;
   pending_hit_.reset();
+  hit.landed = true;
   const int target_life = players_[static_cast<std::size_t>(hit.target)]
                               .positions[static_cast<std::size_t>(hit.target_position)]
                               .life;
@@ -3024,14 +3119,41 @@ void GameState::ActivatePendingHit(PendingHit hit) {
   }
   // Automatic hits (Return Fire, Wild Bill, Tom Thorn, Sidekick, ...) cannot
   // target a character Spurs shields: the hit simply does not happen.
-  if (hit.source != CardName::kSharps &&
-      SpursShield(hit.target, hit.target_position)) {
+  if (BlockedBySpurs(hit)) {
     ContinueAfterResolvedHit(hit);
     return;
   }
   pending_hit_ = hit;
   decision_player_ = hit.target;
   phase_ = Phase::kRespondToHit;
+}
+
+bool GameState::BlockedBySpurs(const PendingHit& hit) const {
+  if (hit.source == CardName::kSharps || hit.source == CardName::kIndians ||
+      hit.source == CardName::kIndianChief) {
+    return false;
+  }
+  return SpursShield(hit.target, hit.target_position);
+}
+
+std::vector<int> GameState::HitResourcesOnActive(int player) const {
+  std::vector<int> result;
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  for (const int instance :
+       state.positions[static_cast<std::size_t>(state.active_position)].equipment) {
+    const auto& card = GetCard(GetCardInstance(instance).name);
+    if (card.kind == CardKind::kResource && card.has_hit) result.push_back(instance);
+  }
+  return result;
+}
+
+void GameState::BeginRicochet() {
+  const int opponent = OtherPlayer(turn_player_);
+  ricochet_ = true;
+  effect_actor_ = turn_player_;
+  effect_target_position_ = players_[static_cast<std::size_t>(opponent)].active_position;
+  decision_player_ = opponent;
+  phase_ = Phase::kDuelResponse;
 }
 
 bool GameState::SpursShield(int player, int position) const {

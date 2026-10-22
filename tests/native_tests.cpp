@@ -1220,6 +1220,122 @@ void TestSpursSidekickAndSharps() {
   }
 }
 
+void TestRicochetAndHitResources() {
+  using CN = bang::CardName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto make = [&](std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  const auto life = [](const bang::GameState& state, int player, bool active) {
+    const auto& side = state.Players()[static_cast<std::size_t>(player)];
+    const int position = active ? side.active_position : 1 - side.active_position;
+    return side.positions[static_cast<std::size_t>(position)].life;
+  };
+  {
+    // Ricochet: avoid cards back and forth, Hat included; the first to stop loses 1.
+    auto state = make({CN::kHat, CN::kRicochet, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kMissed, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int hat = HandCard(state, 0, CN::kHat);
+    state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kRicochet), bang::Target::kOwnActive));
+    Require(state.CurrentPhase() == bang::Phase::kDuelResponse && state.CurrentPlayer() == 1 &&
+                state.RicochetActive() &&
+                !HasAction(state, bang::DiscardCardAction(HandCard(state, 1, CN::kColt))),
+            "Ricochet starts with the opponent and takes avoid cards, not hit cards");
+    state.ApplyAction(bang::DiscardCardAction(HandCard(state, 1, CN::kMissed)));
+    Require(HasAction(state, bang::DiscardCardAction(hat)), "Hat in play answers a Ricochet");
+    state.ApplyAction(bang::DiscardCardAction(hat));
+    const int outlaw_life = life(state, 1, true);
+    state.ApplyAction(bang::kSkipOptionalAction);
+    Require(life(state, 1, true) == outlaw_life - 1 && !state.RicochetActive() &&
+                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 0,
+            "the active character of the first player who stops loses 1 life");
+  }
+  {
+    // Double Barrel: avoided, it targets the other character too.
+    auto state = make({CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kDoubleBarrel, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    EndCurrentTurn(state);
+    const int barrel = HandCard(state, 1, CN::kDoubleBarrel);
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    const int law_active = life(state, 0, true);
+    const int law_rear = life(state, 0, false);
+    state.ApplyAction(bang::UseResourceAction(barrel, bang::Target::kOpponentActive));
+    state.ApplyAction(bang::AvoidHitAction(HandCard(state, 0, CN::kMissed)));
+    Require(state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 0,
+            "an avoided Double Barrel turns on the other character");
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(life(state, 0, true) == law_active && life(state, 0, false) == law_rear - 1,
+            "the rearguard takes Double Barrel's second hit");
+  }
+  {
+    // Howitzer: not avoided, the active and the rearguard each lose 1.
+    auto state = make({CN::kHowitzer, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int howitzer = HandCard(state, 0, CN::kHowitzer);
+    state.ApplyAction(bang::PlayCardAction(howitzer, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    const int active = life(state, 1, true);
+    const int rear = life(state, 1, false);
+    state.ApplyAction(bang::UseResourceAction(howitzer, bang::Target::kOpponentActive));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(life(state, 1, true) == active - 1 && life(state, 1, false) == rear - 1 &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "Howitzer hits both opposing characters when it is not avoided");
+  }
+  {
+    // Indian Chief: each opposing character discards a hit card or loses 1;
+    // a hit Resource on the active may be thrown away instead.
+    auto state = make({CN::kBuffaloRifle, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kIndianChief, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int rifle = HandCard(state, 0, CN::kBuffaloRifle);
+    state.ApplyAction(bang::PlayCardAction(rifle, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurnKeeping(state, {CN::kColt});
+    const int chief = HandCard(state, 1, CN::kIndianChief);
+    state.ApplyAction(bang::PlayCardAction(chief, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    EndCurrentTurnKeeping(state, {CN::kColt});
+    const int active = life(state, 0, true);
+    const int rear = life(state, 0, false);
+    state.ApplyAction(bang::UseResourceAction(chief, bang::Target::kOwnActive));
+    Require(HasAction(state, bang::AvoidHitAction(rifle)) &&
+                HasAction(state, bang::AvoidHitAction(HandCard(state, 0, CN::kColt))),
+            "a hit Resource in play answers Indian Chief like a hit card");
+    state.ApplyAction(bang::AvoidHitAction(rifle));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(life(state, 0, true) == active && life(state, 0, false) == rear - 1,
+            "Indian Chief costs each character a hit card or 1 life");
+  }
+  {
+    // Spurs does not stop Indians!.
+    auto state = make({CN::kSpurs, CN::kHat, CN::kBarrel, CN::kScope, CN::kGunBelt, CN::kBank},
+                      {CN::kIndians, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSpurs), bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    for (const CN name : {CN::kHat, CN::kBarrel, CN::kScope, CN::kGunBelt, CN::kBank}) {
+      state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, name), bang::Target::kOpponentActive));
+    }
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kIndians), bang::Target::kOwnActive));
+    Require(state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 0,
+            "Indians! still reaches a character Spurs protects");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -4922,6 +5038,7 @@ int main() {
     TestRenegadeBangAndAvoidCards();
     TestRenegadeActionCards();
     TestSpursSidekickAndSharps();
+    TestRicochetAndHitResources();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();
