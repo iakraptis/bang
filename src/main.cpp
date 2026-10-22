@@ -358,6 +358,15 @@ int main(int argc, char** argv) {
             config.torch_threads = std::stoi(value());
           } else if (option == "--require-trained") {
             config.require_trained_policy = true;
+          } else if (option == "--mode") {
+            const std::string mode = value();
+            if (mode == "base") {
+              config.mode = bang::GameMode::kBase;
+            } else if (mode == "reinforcements") {
+              config.mode = bang::GameMode::kReinforcements;
+            } else {
+              throw std::invalid_argument("--mode must be base or reinforcements");
+            }
           } else if (option == "--greedy") {
             config.stochastic_policy = false;
           } else {

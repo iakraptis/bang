@@ -894,12 +894,13 @@ struct WebSession {
   std::uint64_t last_touch = 0;
 
   WebSession(std::string session_id, std::uint64_t session_seed,
-             int human, int characters)
+             int human, int characters, GameMode game_mode)
       : id(std::move(session_id)),
         seed(session_seed),
         human_player(human),
         characters_per_side(characters),
         state(GameConfig{.seed = session_seed,
+                         .mode = game_mode,
                          .characters_per_side = characters}),
         bot_rng(session_seed ^ 0xa0761d6478bd642fULL) {}
 };
@@ -1012,7 +1013,8 @@ class BangWebApp {
     const std::uint64_t seed = requested_seed.has_value() && *requested_seed > 0
                                    ? static_cast<std::uint64_t>(*requested_seed)
                                    : session_rng_.NextU64() & 0x7fffffffULL;
-    auto session = std::make_unique<WebSession>(NewSessionId(), seed, human, characters);
+    auto session =
+        std::make_unique<WebSession>(NewSessionId(), seed, human, characters, config_.mode);
     AppendLog(*session, -1,
               "New duel. You command the " +
                   std::string(SideName(static_cast<Side>(human))) + " side.",
@@ -1116,6 +1118,7 @@ class BangWebApp {
         {"seed", static_cast<double>(session.seed)},
         {"humanPlayer", session.human_player},
         {"charactersPerSide", session.characters_per_side},
+        {"mode", static_cast<int>(session.state.Mode())},
         {"actions", std::move(actions)},
         {"log", std::move(log)},
     };
@@ -1176,8 +1179,9 @@ class BangWebApp {
       if (seed == nullptr || !human.has_value() || !characters.has_value()) {
         throw std::runtime_error("journal is missing fields");
       }
+      const auto mode = static_cast<GameMode>(OptionalInt(journal, "mode").value_or(0));
       auto session = std::make_unique<WebSession>(
-          id, static_cast<std::uint64_t>(*seed), *human, *characters);
+          id, static_cast<std::uint64_t>(*seed), *human, *characters, mode);
       // Perturb the bot RNG so a restored bot does not replay the exact
       // random stream it already consumed before the restart.
       session->bot_rng = FastRng(session->seed ^ 0x9e3779b97f4a7c15ULL ^
