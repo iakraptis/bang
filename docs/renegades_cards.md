@@ -138,6 +138,12 @@ Per card:
   the other swap triggers and fires that side's own triggers. It is separate
   from a Switch: the Switch may still swap that side afterwards, and Jim also
   triggers on the Switch's second swap.
+- **Dutch Harry** (implementation): every card he draws after setup (turn
+  draw, effects, Wagon, Union Pacific from either deck) is looked at before the
+  next decision; the starting hand is dealt, not drawn.
+- **Hick Addams** (implementation): draws for Ambush, Carbine, Peacemaker,
+  Slap, Slim Poet and a replaced duplicate Equipment; not for cards taken
+  (Stealing, Poker Alicia) or discarded to react.
 - **Mystic Maid** (implementation): any of her Equipment, Resources included,
   answers a hit as ⊘ or ⊛ (not Sharps), a Duel or a Ricochet, or is played as
   the turn's Colt; she draws 1 card each time.
@@ -188,7 +194,8 @@ Renegade characters are dealt in Reinforcements but have no abilities yet.
 | Ricochet; hit Resources answering Duel and Indians! | Done, with tests |
 | Characters: Big Steve, Charlie Basset, Hottie Delou, King Fishers, The Marshal, Poker Alicia | Done, with tests |
 | Characters: Jim Longhair, Mystic Maid | Done, with tests |
-| Other characters (El Chindi, Hick Addams, Dutch Harry, Kitty Leroy) | To do |
+| Characters: Dutch Harry, Hick Addams | Done, with tests |
+| Other characters (El Chindi, Kitty Leroy) | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 
 ## Rules decisions

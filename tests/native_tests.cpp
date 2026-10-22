@@ -135,6 +135,8 @@ void RequireCardConservation(const bang::GameState& state) {
   cards.insert(cards.end(), state.DiscardPile().begin(), state.DiscardPile().end());
   cards.insert(cards.end(), state.CommonDeck().begin(), state.CommonDeck().end());
   cards.insert(cards.end(), state.ChoiceCards().begin(), state.ChoiceCards().end());
+  const auto set_aside = state.CardsSetAside();
+  cards.insert(cards.end(), set_aside.begin(), set_aside.end());
   for (const auto& player : state.Players()) {
     cards.insert(cards.end(), player.deck.begin(), player.deck.end());
     cards.insert(cards.end(), player.hand.begin(), player.hand.end());
@@ -1671,6 +1673,70 @@ void TestJimLonghairAndMysticMaid() {
                 state.Players()[0].hand.size() == law_hand + 1 &&
                 state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 1,
             "the hit is avoided and she draws 1");
+  }
+}
+
+void TestDutchHarryAndHickAddams() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed,
+                                CN::kMissed, CN::kMissed, CN::kMissed};
+  {
+    // Dutch Harry looks at each card he draws: keep it, or discard it and
+    // keep the next one.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[1] = {id(CH::kDutchHarry), 16};
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, fillers, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, fillers, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    const auto hand = state.Players()[1].hand.size();
+    EndCurrentTurn(state);
+    Require(state.CurrentPhase() == bang::Phase::kChooseDutchHarry && state.CurrentPlayer() == 1 &&
+                state.ChoiceCards().size() == 1 && state.ChoiceCardsVisibleTo(1) &&
+                !state.ChoiceCardsVisibleTo(0),
+            "Dutch Harry looks at his first draw");
+    const int looked = state.ChoiceCards().front();
+    const int next = state.Players()[1].deck.back();
+    state.ApplyAction(bang::kSkipOptionalAction);
+    Require(state.DiscardPile().back() == looked && InHand(state, 1, next) &&
+                state.CurrentPhase() == bang::Phase::kChooseDutchHarry,
+            "discarding it keeps the next card; then the second draw");
+    const int second = state.ChoiceCards().front();
+    state.ApplyAction(bang::kAcceptOptionalAction);
+    Require(InHand(state, 1, second) && state.Players()[1].hand.size() == hand + 2 &&
+                state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 1,
+            "keeping it, then play begins");
+    RequireCardConservation(state);
+  }
+  {
+    // Hick Addams draws when the opponent makes him discard from him.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = {1, id(CH::kHickAddams)};
+    config.starting_decks[0] = DeckWithTop(
+        bang::Side::kLaw, {CN::kBarrel, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+        kMode);
+    config.starting_decks[1] = DeckWithTop(
+        bang::Side::kOutlaw, {CN::kAmbush, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    const int barrel = HandCard(state, 0, CN::kBarrel);
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kAmbush), bang::Target::kOwnActive));
+    while (state.CurrentPhase() == bang::Phase::kChooseAmbush &&
+           !HasAction(state, bang::SelectCardAction(barrel))) {
+      state.ApplyAction(bang::kSkipOptionalAction);
+    }
+    const auto hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::SelectCardAction(barrel));
+    Require(state.DiscardPile().back() == barrel && state.Players()[0].hand.size() == hand + 1,
+            "Hick Addams draws 1 when Ambush discards his Equipment");
   }
 }
 
@@ -5381,6 +5447,7 @@ int main() {
     TestRenegadeCharactersResources();
     TestTheMarshalAndPokerAlicia();
     TestJimLonghairAndMysticMaid();
+    TestDutchHarryAndHickAddams();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

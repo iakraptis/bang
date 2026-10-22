@@ -201,6 +201,7 @@ std::string PhaseName(Phase phase) {
     case Phase::kChooseUnionPacific: return "choose_union_pacific";
     case Phase::kChooseAmbush: return "choose_ambush";
     case Phase::kChooseSlap: return "choose_slap";
+    case Phase::kChooseDutchHarry: return "choose_dutch_harry";
   }
   throw std::logic_error("unknown phase");
 }
@@ -227,6 +228,7 @@ std::string PhaseLabel(Phase phase) {
     case Phase::kChooseUnionPacific: return "Choose a deck to draw from";
     case Phase::kChooseAmbush: return "Choose Equipment to discard";
     case Phase::kChooseSlap: return "Choose what Slap discards";
+    case Phase::kChooseDutchHarry: return "Dutch Harry: keep this card?";
   }
   throw std::logic_error("unknown phase");
 }
@@ -271,6 +273,9 @@ std::string PhaseHint(Phase phase) {
     case Phase::kChooseAmbush:
       return "Ambush discards 1 card in play from your active character, then "
              "1 from any active character. Either may be skipped.";
+    case Phase::kChooseDutchHarry:
+      return "Dutch Harry looks at each card before drawing it. Keep it, or "
+             "discard it and take the next card, which must be kept.";
     case Phase::kChooseSlap:
       return "Slap discards 1 card in play from any active character, then 1 "
              "card from a hand: yours by choice, the opponent's at random by "
@@ -664,6 +669,9 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       } else if (state.CurrentPhase() == Phase::kChooseSwitch) {
         label = accept ? "Swap the other side too" : "Stop here";
         detail = accept ? "Switch's second swap" : "Keep the other side as it is";
+      } else if (state.CurrentPhase() == Phase::kChooseDutchHarry) {
+        label = accept ? "Keep it" : "Discard it";
+        detail = accept ? "Draw the card you looked at" : "Take the next card instead";
       } else if (state.CurrentPhase() == Phase::kChooseAmbush ||
                  state.CurrentPhase() == Phase::kChooseSlap) {
         label = "Skip";

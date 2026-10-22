@@ -69,6 +69,7 @@ enum class Phase : std::uint8_t {
   kChooseUnionPacific,
   kChooseAmbush,
   kChooseSlap,
+  kChooseDutchHarry,
 };
 
 class FastRng {
@@ -134,6 +135,8 @@ class GameState {
   const std::vector<int>& DiscardPile() const;
   const std::vector<int>& CommonDeck() const;
   const std::vector<int>& ChoiceCards() const;
+  // Cards held aside while Dutch Harry looks at his draws.
+  std::vector<int> CardsSetAside() const;
   const std::vector<int>& RevealedCards() const;
 
   enum class RevealReason : std::uint8_t {
@@ -274,6 +277,20 @@ class GameState {
   int extra_bang_allowance_ = 0;
   // Switch: the side that may still swap once the first swap has resolved.
   int switch_second_player_ = -1;
+  // Dutch Harry: draws waiting for his look, resolved before the next
+  // decision, with the interrupted decision saved meanwhile.
+  struct DutchHarryDraw {
+    int deck_owner = -1;
+    bool to_wagon = false;
+  };
+  std::vector<DutchHarryDraw> dutch_draws_;
+  int dutch_player_ = -1;
+  bool dutch_wagon_ = false;
+  std::vector<int> dutch_wagon_cards_;
+  Phase dutch_saved_phase_ = Phase::kPlay;
+  int dutch_saved_decision_ = -1;
+  std::vector<int> dutch_saved_choice_;
+  bool dutch_saved_choice_public_ = false;
   int deck_draw_player_ = -1;
   int deck_draws_remaining_ = 0;
   DeckDrawResume deck_draw_resume_ = DeckDrawResume::kPlay;
@@ -418,6 +435,16 @@ class GameState {
   bool CanUsePearlHat() const;
   void FinishJango(bool draw);
   void FinishJimLonghair(bool swap);
+  void ApplyLegalAction(const ActionKey& action);
+  // Draw 1 card from `deck_owner`'s deck (or the common deck) into
+  // `player`'s hand; Dutch Harry's draws wait for his look.
+  void DrawFromDeck(int player, int deck_owner);
+  void BeginDutchHarryLooks();
+  void NextDutchHarryLook();
+  void FinishDutchHarry(bool keep);
+  void ContinueWagon();
+  // Hick Addams draws when the opponent makes him discard.
+  void HickAddamsDraw(int owner, int actor, std::optional<int> equipment_position);
   // Mystic Maid's Equipment while she is the active character.
   std::vector<int> MysticMaidEquipment(int player) const;
   void FinishMysticMaidAvoid(int card_instance);

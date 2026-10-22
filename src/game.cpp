@@ -123,6 +123,12 @@ const std::array<PlayerState, kSideCount>& GameState::Players() const { return p
 const std::vector<int>& GameState::DiscardPile() const { return discard_; }
 const std::vector<int>& GameState::CommonDeck() const { return common_deck_; }
 const std::vector<int>& GameState::ChoiceCards() const { return choice_cards_; }
+
+std::vector<int> GameState::CardsSetAside() const {
+  std::vector<int> result = dutch_saved_choice_;
+  result.insert(result.end(), dutch_wagon_cards_.begin(), dutch_wagon_cards_.end());
+  return result;
+}
 const std::vector<int>& GameState::RevealedCards() const {
   return revealed_cards_;
 }
@@ -241,6 +247,11 @@ std::vector<int> GameState::LegalActions() const {
     for (const int instance : ActiveEquipmentInstances()) {
       result.push_back(DiscardCardAction(instance));
     }
+    return result;
+  }
+  if (phase_ == Phase::kChooseDutchHarry) {
+    result.push_back(kSkipOptionalAction);    // discard it, keep the next
+    result.push_back(kAcceptOptionalAction);  // keep it
     return result;
   }
   if (phase_ == Phase::kChooseSwitch) {
@@ -811,8 +822,11 @@ void GameState::ApplyAction(int action_id) {
                                                    : std::to_string(action_id);
     throw std::invalid_argument("illegal action: " + description);
   }
-  const auto action = DecodeAction(action_id);
+  ApplyLegalAction(DecodeAction(action_id));
+  BeginDutchHarryLooks();
+}
 
+void GameState::ApplyLegalAction(const ActionKey& action) {
   if (action.kind == ActionKind::kChooseActive) {
     players_[static_cast<std::size_t>(decision_player_)].active_position = action.card_instance;
     active_chosen_[static_cast<std::size_t>(decision_player_)] = true;
@@ -883,6 +897,8 @@ void GameState::ApplyAction(int action_id) {
       FinishSchoolmarm(std::nullopt);
     } else if (phase_ == Phase::kChooseSwitch) {
       FinishSwitchSecond(action.card_instance == 1);
+    } else if (phase_ == Phase::kChooseDutchHarry) {
+      FinishDutchHarry(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseAmbush && action.card_instance == 0) {
       FinishAmbushPick(std::nullopt);
     } else if (phase_ == Phase::kChooseSlap && action.card_instance == 0) {
@@ -1176,13 +1192,100 @@ void GameState::DrawCards(int player, int count) {
   for (int i = 0; i < count; ++i) DrawOne(player);
 }
 
-void GameState::DrawOne(int player) {
-  const auto card = TakeTopCard(player);
+void GameState::DrawOne(int player) { DrawFromDeck(player, player); }
+
+void GameState::DrawFromDeck(int player, int deck_owner) {
+  if (active_chosen_[0] && active_chosen_[1] &&
+      IsCharacterAbilityActive(player, CharacterName::kDutchHarry)) {
+    dutch_player_ = player;
+    dutch_draws_.push_back({deck_owner, false});
+    return;
+  }
+  const auto card = TakeTopCard(deck_owner);
   if (card) players_[static_cast<std::size_t>(player)].hand.push_back(*card);
 }
 
+void GameState::BeginDutchHarryLooks() {
+  if (dutch_draws_.empty() || phase_ == Phase::kChooseDutchHarry) return;
+  if (IsTerminal()) {
+    dutch_draws_.clear();
+    return;
+  }
+  dutch_saved_phase_ = phase_;
+  dutch_saved_decision_ = decision_player_;
+  dutch_saved_choice_ = std::move(choice_cards_);
+  choice_cards_.clear();
+  dutch_saved_choice_public_ = choice_cards_public_;
+  choice_cards_public_ = false;
+  NextDutchHarryLook();
+}
+
+void GameState::NextDutchHarryLook() {
+  while (!dutch_draws_.empty()) {
+    const auto card = TakeTopCard(dutch_draws_.front().deck_owner);
+    if (card) {
+      // He sees the top card and keeps it or discards it.
+      choice_cards_ = {*card};
+      decision_player_ = dutch_player_;
+      phase_ = Phase::kChooseDutchHarry;
+      return;
+    }
+    dutch_draws_.erase(dutch_draws_.begin());
+  }
+  phase_ = dutch_saved_phase_;
+  decision_player_ = dutch_saved_decision_;
+  choice_cards_ = std::move(dutch_saved_choice_);
+  dutch_saved_choice_.clear();
+  choice_cards_public_ = dutch_saved_choice_public_;
+  dutch_player_ = -1;
+  if (dutch_wagon_) {
+    dutch_wagon_ = false;
+    choice_cards_ = std::move(dutch_wagon_cards_);
+    dutch_wagon_cards_.clear();
+    ContinueWagon();
+  }
+}
+
+void GameState::FinishDutchHarry(bool keep) {
+  if (phase_ != Phase::kChooseDutchHarry || dutch_draws_.empty() || choice_cards_.size() != 1) {
+    throw std::logic_error("there is no Dutch Harry look pending");
+  }
+  const DutchHarryDraw draw = dutch_draws_.front();
+  dutch_draws_.erase(dutch_draws_.begin());
+  std::optional<int> kept = choice_cards_.front();
+  choice_cards_.clear();
+  if (!keep) {
+    // Discarded: the next card must be kept.
+    discard_.push_back(*kept);
+    kept = TakeTopCard(draw.deck_owner);
+  }
+  if (kept) {
+    if (draw.to_wagon) {
+      dutch_wagon_cards_.push_back(*kept);
+    } else {
+      players_[static_cast<std::size_t>(dutch_player_)].hand.push_back(*kept);
+    }
+  }
+  NextDutchHarryLook();
+}
+
+void GameState::HickAddamsDraw(int owner, int actor,
+                               std::optional<int> equipment_position) {
+  if (owner < 0 || actor < 0 || owner == actor ||
+      !IsCharacterAbilityActive(owner, CharacterName::kHickAddams)) {
+    return;
+  }
+  // From Hick himself: he is the active character.
+  if (equipment_position &&
+      *equipment_position != players_[static_cast<std::size_t>(owner)].active_position) {
+    return;
+  }
+  DrawOne(owner);
+}
+
 void GameState::DrawTurnCards(int count) {
-  if (count <= 0) {
+  if (count <= 0 || IsCharacterAbilityActive(turn_player_, CharacterName::kDutchHarry)) {
+    DrawCards(turn_player_, count);
     decision_player_ = turn_player_;
     phase_ = Phase::kPlay;
     return;
@@ -1462,12 +1565,7 @@ void GameState::BeginDeckDraws(int player, int count, DeckDrawResume resume) {
 void GameState::FinishDeckDraw(bool opponent) {
   if (deck_draws_remaining_ <= 0) throw std::logic_error("no deck draw pending");
   const int player = deck_draw_player_;
-  if (opponent) {
-    const auto card = TakeTopCard(OtherPlayer(player));
-    if (card) players_[static_cast<std::size_t>(player)].hand.push_back(*card);
-  } else {
-    DrawOne(player);
-  }
+  DrawFromDeck(player, opponent ? OtherPlayer(player) : player);
   if (--deck_draws_remaining_ > 0) return;
   deck_draw_player_ = -1;
   switch (deck_draw_resume_) {
@@ -1501,6 +1599,7 @@ void GameState::FinishAmbushPick(std::optional<int> card_instance) {
     }
     if (owner < 0) throw std::logic_error("Ambush target is not on an allowed AC");
     RemoveEquipment(owner, position, *card_instance);
+    HickAddamsDraw(owner, turn_player_, position);
   }
   if (ambush_stage_ == 0) {
     ambush_stage_ = 1;
@@ -1720,6 +1819,7 @@ void GameState::PlaceEquipment(int actor, int card_instance, Target target) {
     }
   }
   if (replaced) {
+    HickAddamsDraw(target_player, actor, target_position);
     BeginWildBillReaction(target_player, actor, ResumeKind::kPlay,
                           target_position);
   }
@@ -2362,10 +2462,21 @@ void GameState::BeginWagon() {
   effect_actor_ = turn_player_;
   choice_cards_.clear();
   choice_cards_public_ = false;
+  if (IsCharacterAbilityActive(effect_actor_, CharacterName::kDutchHarry)) {
+    // Dutch Harry looks at each of the 3 cards first.
+    dutch_player_ = effect_actor_;
+    dutch_wagon_ = true;
+    for (int index = 0; index < 3; ++index) dutch_draws_.push_back({effect_actor_, true});
+    return;
+  }
   for (int index = 0; index < 3; ++index) {
     const auto card = TakeTopCard(effect_actor_);
     if (card) choice_cards_.push_back(*card);
   }
+  ContinueWagon();
+}
+
+void GameState::ContinueWagon() {
   if (choice_cards_.size() <= 2) {
     auto& hand = players_[static_cast<std::size_t>(effect_actor_)].hand;
     hand.insert(hand.end(), choice_cards_.begin(), choice_cards_.end());
@@ -3141,6 +3252,7 @@ void GameState::FinishSlimPoetHand(Side origin) {
   }
   const int card = candidates[rng_.USize(candidates.size())];
   DiscardFromHand(opponent, card);
+  HickAddamsDraw(opponent, reaction.player, std::nullopt);
   reaction.choosing_origin = false;
   --reaction.remaining;
   if (BeginWildBillReaction(opponent, reaction.player,
@@ -3264,6 +3376,7 @@ void GameState::FinishForcedDiscard(int card_instance) {
   const int owner = optional_effect_player_;
   const int actor = optional_effect_hit_->attacker;
   DiscardFromHand(optional_effect_player_, card_instance);
+  HickAddamsDraw(owner, actor, std::nullopt);
   if (BeginWildBillReaction(owner, actor, ResumeKind::kPendingEffect)) {
     return;
   }
@@ -3302,6 +3415,7 @@ void GameState::FinishCarbineChoice(int equipment_instance) {
       }
     }
     if (!removed) throw std::logic_error("Carbine target is not on an AC");
+    HickAddamsDraw(owner, optional_effect_player_, position);
     if (BeginWildBillReaction(owner, optional_effect_player_,
                               ResumeKind::kPendingEffect, position)) {
       return;
@@ -3404,6 +3518,7 @@ void GameState::FinishSlapPick(std::optional<int> card_instance) {
     if (owner < 0) throw std::logic_error("Slap target is not on an AC");
     const int active = players_[static_cast<std::size_t>(owner)].active_position;
     RemoveEquipment(owner, active, *card_instance);
+    HickAddamsDraw(owner, turn_player_, active);
     // Wild Bill reacts when the card was on him.
     if (owner != turn_player_ && TargetHasAbility(owner, active, CharacterName::kWildBill)) {
       slap_wild_bill_owners_.push_back(owner);
@@ -3434,6 +3549,7 @@ void GameState::FinishSlapHandBack(Side origin) {
   opponent.erase(opponent.begin() + static_cast<std::ptrdiff_t>(selected));
   ForgetPublicHandCard(opponent_player, card);
   discard_.push_back(card);
+  HickAddamsDraw(opponent_player, turn_player_, std::nullopt);
   if (IsCharacterAbilityActive(opponent_player, CharacterName::kWildBill)) {
     slap_wild_bill_owners_.push_back(opponent_player);
   }
@@ -4109,7 +4225,9 @@ std::array<float, kObservationSize> GameState::ObservationTensor(int observer) c
   }
   result[obs_layout::kDeferredHitCountOffset] =
       static_cast<float>(deferred_effect_count) / 8.0F;
-  const bool can_see_choice_cards = choice_cards_public_ || effect_actor_ == observer;
+  const bool can_see_choice_cards =
+      choice_cards_public_ || effect_actor_ == observer ||
+      (phase_ == Phase::kChooseDutchHarry && decision_player_ == observer);
   if (can_see_choice_cards) {
     for (const int instance : choice_cards_) {
       const auto& card = GetCardInstance(instance);
