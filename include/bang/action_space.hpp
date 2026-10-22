@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 
+#include "bang/input_layout.hpp"
 #include "bang/static_data.hpp"
 
 namespace bang {
@@ -41,24 +42,29 @@ struct ActionKey {
 };
 
 inline constexpr int kActionKindCount = 15;
-inline constexpr int kActionFeatureKindOffset = 0;
-inline constexpr int kActionFeatureCardNameOffset =
-    kActionFeatureKindOffset + kActionKindCount;
-inline constexpr int kActionFeatureRevealOffset =
-    kActionFeatureCardNameOffset + kCardNameCount;
-inline constexpr int kActionFeatureOriginOffset =
-    kActionFeatureRevealOffset + 4;
-inline constexpr int kActionFeatureCardKindOffset =
-    kActionFeatureOriginOffset + kSideCount;
-inline constexpr int kActionFeatureCardPropertyOffset =
-    kActionFeatureCardKindOffset + 3;
-inline constexpr int kActionFeatureTargetOffset =
-    kActionFeatureCardPropertyOffset + 4;
-inline constexpr int kActionFeatureCharacterOffset =
-    kActionFeatureTargetOffset + 4;
-inline constexpr int kActionFeatureOptionOffset =
-    kActionFeatureCharacterOffset + kCharacterCount;
-inline constexpr int kActionFeatureSize = kActionFeatureOptionOffset + 4;
+inline constexpr int kCardKindCount = 3;
+inline constexpr int kPhaseCapacity = 16;
+static_assert(static_cast<int>(ActionKind::kUseAbility) + 1 == kActionKindCount);
+static_assert(static_cast<int>(CardKind::kBang) + 1 == kCardKindCount);
+
+// The counts every policy input is laid out from (see input_layout.hpp).
+inline constexpr LayoutDims kLayoutDims{
+    kCardNameCount, kCharacterCount, kCardInstanceCount, kSideCount,
+    kPhaseCapacity, kCardKindCount, kActionKindCount};
+
+constexpr int ActionFeatureOffset(ActionFeatureBlock block) {
+  return ActionFeatureStart(kLayoutDims, block);
+}
+inline constexpr int kActionFeatureKindOffset = ActionFeatureOffset(ActionFeatureBlock::kKind);
+inline constexpr int kActionFeatureCardNameOffset = ActionFeatureOffset(ActionFeatureBlock::kCardName);
+inline constexpr int kActionFeatureRevealOffset = ActionFeatureOffset(ActionFeatureBlock::kReveal);
+inline constexpr int kActionFeatureOriginOffset = ActionFeatureOffset(ActionFeatureBlock::kOrigin);
+inline constexpr int kActionFeatureCardKindOffset = ActionFeatureOffset(ActionFeatureBlock::kCardKind);
+inline constexpr int kActionFeatureCardPropertyOffset = ActionFeatureOffset(ActionFeatureBlock::kCardProperty);
+inline constexpr int kActionFeatureTargetOffset = ActionFeatureOffset(ActionFeatureBlock::kTarget);
+inline constexpr int kActionFeatureCharacterOffset = ActionFeatureOffset(ActionFeatureBlock::kCharacter);
+inline constexpr int kActionFeatureOptionOffset = ActionFeatureOffset(ActionFeatureBlock::kOption);
+inline constexpr int kActionFeatureSize = BlockTotal(ActionFeatureBlockSizes(kLayoutDims));
 
 struct ActionFeature {
   std::array<float, kActionFeatureSize> values{};

@@ -25,6 +25,7 @@ add_library(bang_core
   src/action_space.cpp
   src/game.cpp
   src/heuristic.cpp
+  src/input_layout.cpp
   src/json.cpp
   src/static_data.cpp
   src/static_policy.cpp

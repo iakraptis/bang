@@ -10,36 +10,42 @@
 
 namespace bang {
 
-inline constexpr int kObservationSize = 859;
+// Sizes and offsets of the policy inputs, from the block tables in
+// input_layout.hpp for the engine's current counts.
+inline constexpr int kObservationSize = ObservationSizeFor(kLayoutDims);
 inline constexpr int kTrainingObservationBaseSize = kObservationSize;
 inline constexpr int kTrainingObservationSideOffset =
-    kTrainingObservationBaseSize;
+    TrainingStart(kLayoutDims, TrainingBlock::kSide);
 inline constexpr int kTrainingObservationOwnHandOffset =
-    kTrainingObservationSideOffset + kSideCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kOwnHand);
 inline constexpr int kTrainingObservationDiscardOffset =
-    kTrainingObservationOwnHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kDiscard);
 inline constexpr int kTrainingObservationKnownOwnHandOffset =
-    kTrainingObservationDiscardOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kKnownOwnHand);
 inline constexpr int kTrainingObservationKnownOpponentHandOffset =
-    kTrainingObservationKnownOwnHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kKnownOpponentHand);
 inline constexpr int kTrainingObservationSeenOwnCharactersOffset =
-    kTrainingObservationKnownOpponentHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kSeenOwnCharacters);
 inline constexpr int kTrainingObservationSeenOpponentCharactersOffset =
-    kTrainingObservationSeenOwnCharactersOffset + kCharacterCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kSeenOpponentCharacters);
 inline constexpr int kTrainingObservationSize =
-    kTrainingObservationSeenOpponentCharactersOffset + kCharacterCount;
+    BlockTotal(TrainingBlockSizes(kLayoutDims));
 
-inline constexpr int kPrivilegedPlayerHandOffset = 0;
+// The privileged observation is one block per player (observer first), then
+// the common deck. Player offsets are relative to that player's block.
+inline constexpr int kPrivilegedPlayerHandOffset =
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverHand);
 inline constexpr int kPrivilegedPlayerDeckOffset =
-    kPrivilegedPlayerHandOffset + kCardInstanceCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverDeck);
 inline constexpr int kPrivilegedPlayerReserveOffset =
-    kPrivilegedPlayerDeckOffset + kCardInstanceCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverReserve);
 inline constexpr int kPrivilegedPlayerSize =
-    kPrivilegedPlayerReserveOffset + kCharacterCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kOpponentHand);
 inline constexpr int kPrivilegedCommonDeckOffset =
-    kPrivilegedPlayerSize * kSideCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kCommonDeck);
 inline constexpr int kPrivilegedObservationSize =
-    kPrivilegedCommonDeckOffset + kCardInstanceCount;
+    BlockTotal(PrivilegedBlockSizes(kLayoutDims));
+static_assert(kPrivilegedCommonDeckOffset == kPrivilegedPlayerSize * kSideCount);
 
 enum class Phase : std::uint8_t {
   kChooseActive,

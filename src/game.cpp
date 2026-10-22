@@ -3171,7 +3171,8 @@ std::array<float, kObservationSize> GameState::ObservationTensor(int observer) c
     const int offset = slot == 0 ? obs_layout::kFirstRevealedCardOffset
                                  : obs_layout::kSecondRevealedCardOffset;
     result[static_cast<std::size_t>(offset + static_cast<int>(card.name))] = 1.0F;
-    result[static_cast<std::size_t>(offset + 31 + static_cast<int>(card.reveal))] = 1.0F;
+    result[static_cast<std::size_t>(offset + kCardNameCount +
+                                    static_cast<int>(card.reveal))] = 1.0F;
   }
   if (pending_hit_) {
     result[obs_layout::kPendingHitSourceOffset +

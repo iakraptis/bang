@@ -9,6 +9,7 @@
 #include <string>
 
 #include "bang/game.hpp"
+#include "bang/input_layout.hpp"
 #include "bang/observation_layout.hpp"
 #include "bang/policy_architecture.hpp"
 #include "bang/static_policy.hpp"
@@ -222,6 +223,58 @@ void TestStaticData() {
                          static_cast<bang::CharacterName>(index)),
             "character always-active symbols match the printed cards");
   }
+}
+
+void TestInputLayouts() {
+  // The engine's layout is built from the same block table as the base one.
+  Require(bang::kObservationSize == bang::ObservationSizeFor(bang::kLayoutDims) &&
+              bang::kActionFeatureSize ==
+                  bang::BlockTotal(bang::ActionFeatureBlockSizes(bang::kLayoutDims)),
+          "input sizes come from the block tables");
+
+  // Mapping a layout onto itself is the identity.
+  const auto same = bang::LayoutIndexMap(
+      bang::LayoutKind::kTraining, bang::kLayoutDims, bang::kLayoutDims);
+  bool identity = static_cast<int>(same.size()) == bang::kTrainingObservationSize;
+  for (std::size_t index = 0; identity && index < same.size(); ++index) {
+    identity = same[index] == static_cast<int>(index);
+  }
+  Require(identity, "a layout maps onto itself unchanged");
+
+  // Onto a larger layout every block keeps its old prefix, so an index keeps
+  // its meaning: a card's name slot, a character's slot, a card copy's slot.
+  bang::LayoutDims larger = bang::kBaseLayoutDims;
+  larger.card_names += 5;
+  larger.characters += 3;
+  larger.card_instances += 10;
+  larger.phases += 4;
+  larger.card_kinds += 1;
+  const auto obs = bang::LayoutIndexMap(
+      bang::LayoutKind::kObservation, bang::kBaseLayoutDims, larger);
+  const auto at = [](const bang::LayoutDims& dims, bang::ObsBlock block, int index) {
+    return bang::ObsStart(dims, block) + index;
+  };
+  Require(static_cast<int>(obs.size()) == bang::ObservationSizeFor(bang::kBaseLayoutDims) &&
+              obs[static_cast<std::size_t>(at(bang::kBaseLayoutDims, bang::ObsBlock::kPrivateHand, 30))] ==
+                  at(larger, bang::ObsBlock::kPrivateHand, 30) &&
+              obs[static_cast<std::size_t>(at(bang::kBaseLayoutDims, bang::ObsBlock::kOpponentRearguardCharacter, 23))] ==
+                  at(larger, bang::ObsBlock::kOpponentRearguardCharacter, 23) &&
+              obs[static_cast<std::size_t>(at(bang::kBaseLayoutDims, bang::ObsBlock::kTopDiscardOrigin, 1))] ==
+                  at(larger, bang::ObsBlock::kTopDiscardOrigin, 1),
+          "observation indices keep their block and position on a larger layout");
+  const auto features = bang::LayoutIndexMap(
+      bang::LayoutKind::kActionFeature, bang::kBaseLayoutDims, larger);
+  Require(features[static_cast<std::size_t>(bang::ActionFeatureStart(
+              bang::kBaseLayoutDims, bang::ActionFeatureBlock::kOption))] ==
+              bang::ActionFeatureStart(larger, bang::ActionFeatureBlock::kOption),
+          "action features keep their block on a larger layout");
+  bool threw = false;
+  try {
+    (void)bang::LayoutIndexMap(bang::LayoutKind::kObservation, larger, bang::kBaseLayoutDims);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  Require(threw, "a layout cannot be mapped onto a smaller one");
 }
 
 void TestWebAppSmoke() {
@@ -4340,6 +4393,7 @@ void TestIllegalActionRejected() {
 int main() {
   try {
     TestStaticData();
+    TestInputLayouts();
     TestWebAppSmoke();
     TestWebForcedResponses();
     TestWebAbilityPrompts();
