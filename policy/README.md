@@ -5,7 +5,7 @@
 trained with the standard v2 League PPO recipe plus a Magnetic Mirror Descent
 term (`--mmd-alpha 0.3 --magnet-interval 50`) and beats the previous
 iteration-2995 PPO champion 55.98% over 2048 paired seeds (seed 1300001).
-Keeping the inference artifact in the repository makes the production build
+Keeping the inference artifact in the repository makes the static web build
 reproducible without access to local training runs.
 
 Regenerate it from a complete checkpoint with:

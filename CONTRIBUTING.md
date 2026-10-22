@@ -1,5 +1,11 @@
 # Contributing
 
+> This is a personal fork of [hmate9/bang](https://github.com/hmate9/bang), not
+> affiliated with its creator, and it has no deployment. Changes that should
+> reach players, including a stronger agent for bang.matehegedus.com, go
+> upstream as pull requests to the original repository, following its own
+> CONTRIBUTING.md.
+
 Contributions are welcome. This project is small on purpose — one game, one
 engine, one training stack — which makes it a realistic repo to land a change in
 without a week of onboarding.
@@ -8,7 +14,8 @@ There are two contribution paths. Pick the one that matches what you have:
 
 - **[Code](#code-contributions)** — engine, trainer, web table, docs.
 - **[Trained checkpoints](#checkpoint-contributions)** — you trained a stronger
-  agent and want it to be the one people play at bang.matehegedus.com.
+  agent and want it to be this fork's browser opponent. To change what plays at
+  bang.matehegedus.com, submit it to the original repository instead.
 
 ---
 
@@ -43,7 +50,7 @@ Touched something bigger? Add the matching flag:
 4. Open a PR and fill in the template. Paste the last lines of the check output.
 
 There is no CI: the check output in the PR is the evidence the change passes.
-Deployment to production is manual (see the README's static web build).
+This fork has no deployment; the README's static web build runs it locally.
 
 ### Where tests live
 
@@ -91,9 +98,10 @@ The [known limitations](README.md#known-limitations) each make a solid PR:
 
 ## Checkpoint contributions
 
-If you trained an agent that beats the current champion, you can make it the one
-the live site plays. `policy/static-policy.json` is the deployed policy: the static web build
-(`tools/build_static_web.sh`) bakes it into the WASM bundle.
+If you trained an agent that beats the current champion, you can make it this
+fork's browser opponent. `policy/static-policy.json` is the policy the browser
+plays: the static web build (`tools/build_static_web.sh`) bakes it into the WASM
+bundle.
 
 Checkpoints (`.pt` files) are **not** committed — only the exported browser
 policy, which is a single JSON file.

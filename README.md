@@ -1,7 +1,13 @@
 # BANG! The Duel — a small PPO project
 
-**[▶ Play against the trained agent at bang.matehegedus.com](https://bang.matehegedus.com)**
-— no install, no account, runs entirely in your browser.
+> **This is a personal fork** of [hmate9/bang](https://github.com/hmate9/bang) and
+> is not affiliated with its creator. The original game is playable at
+> [bang.matehegedus.com](https://bang.matehegedus.com); this fork does not deploy
+> to or control that site, and deploys nowhere itself. It adds Windows and GPU
+> training, Magnetic Mirror Descent training (its agent beats the original
+> champion about 56% of paired games), and a move-by-move replay of the
+> opponent's turn. Run it locally with `bang_duel web` (see the quick start).
+> Changes meant for players belong upstream as pull requests to the original.
 
 This is a deliberately small project that explores one question:
 
@@ -28,7 +34,7 @@ produce the exact same observation. The agent has to play the average.
 | League PPO trainer (C++ / LibTorch) | `src/training.cpp`, `tools/train.py` | 222k-param default actor |
 | Browser-native inference (no LibTorch) | `src/static_policy.cpp` | plays from a 1-file JSON policy |
 | Web table (native server + WASM) | `web/`, `src/web.cpp` | zero rules logic in JavaScript |
-| Trained champion policy | `policy/static-policy.json` | what the live site plays |
+| Trained champion policy | `policy/static-policy.json` | what the browser opponent plays |
 
 Everything shares one source of rules truth. The frontend calls the engine; it
 never reimplements a rule.
@@ -73,15 +79,16 @@ webapp (below) or point the server at a training run with `--require-trained`.
 
 ### 4. (Optional) Build the static webapp
 
-The whole engine compiles to WebAssembly, so the production site is just files
-on a static host — no backend, no API calls. Requires Emscripten (`em++`).
+The whole engine compiles to WebAssembly, so the static webapp is just files
+any static host can serve — no backend, no API calls. Requires Emscripten (`em++`).
 
 ```sh
 tools/build_static_web.sh web/dist-static policy/static-policy.json
 python3 -m http.server 8765 --directory web/dist-static
 ```
 
-That is exactly the bundle deployed to bang.matehegedus.com.
+The original project deploys this same bundle at bang.matehegedus.com; this
+fork does not deploy it anywhere.
 The bundle also contains `about.html`, a scroll-driven explainer of the game, the
 training system, and the learned meta, with figures generated from the real
 training metrics.
