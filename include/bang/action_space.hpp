@@ -48,13 +48,16 @@ inline constexpr int kCardKindCount = 4;
 inline constexpr int kPhaseCapacity = 32;
 // Barrel, Dynamite, Rattlesnake, Whiskey (Sid Curry has a slot of its own).
 inline constexpr int kRevealReasonInputs = 4;
+// Tom Thorn, Clock, Jango, Sidekick.
+inline constexpr int kMovementTriggerInputs = 4;
 static_assert(static_cast<int>(ActionKind::kUseResource) + 1 == kActionKindCount);
 static_assert(static_cast<int>(CardKind::kResource) + 1 == kCardKindCount);
 
 // The counts every policy input is laid out from (see input_layout.hpp).
 inline constexpr LayoutDims kLayoutDims{
     kCardNameCount, kCharacterCount, kCardInstanceCount, kSideCount,
-    kPhaseCapacity, kCardKindCount, kActionKindCount, kRevealReasonInputs};
+    kPhaseCapacity, kCardKindCount, kActionKindCount, kRevealReasonInputs,
+    kMovementTriggerInputs};
 
 constexpr int ActionFeatureOffset(ActionFeatureBlock block) {
   return ActionFeatureStart(kLayoutDims, block);

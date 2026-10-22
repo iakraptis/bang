@@ -1146,6 +1146,80 @@ void TestRenegadeActionCards() {
   }
 }
 
+void TestSpursSidekickAndSharps() {
+  using CN = bang::CardName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto make = [&](std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  {
+    // The Law empties its hand behind Spurs.
+    auto state = make({CN::kSpurs, CN::kHat, CN::kBarrel, CN::kScope, CN::kGunBelt, CN::kBank},
+                      {CN::kColt, CN::kSharps, CN::kSidekick, CN::kMissed, CN::kMissed});
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSpurs), bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    for (const CN name : {CN::kHat, CN::kBarrel, CN::kScope, CN::kGunBelt, CN::kBank}) {
+      state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, name), bang::Target::kOpponentActive));
+    }
+    Require(state.Players()[0].hand.empty(), "the Law holds no cards");
+    EndCurrentTurn(state);
+    // The Outlaw drew 2: the Law's hand is still empty on the Outlaw's turn.
+    const int law_active = state.Players()[0].active_position;
+    const auto law_life = [&] {
+      return state.Players()[0].positions[static_cast<std::size_t>(law_active)].life;
+    };
+    Require(!HasAction(state, bang::PlayCardAction(HandCard(state, 1, CN::kColt))),
+            "Spurs: a character whose owner holds no cards cannot be shot");
+
+    // Sidekick's automatic hit is blocked by Spurs too.
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kSidekick),
+                                           bang::Target::kOwnRearguard));
+    const int life_before = law_life();
+    state.ApplyAction(bang::kSwapAction);
+    Require(state.CurrentPhase() == bang::Phase::kPlay && law_life() == life_before,
+            "Spurs stops Sidekick's automatic hit");
+
+    const int sharps = HandCard(state, 1, CN::kSharps);
+    Require(HasAction(state, bang::PlayCardAction(sharps)), "Sharps ignores Spurs");
+    state.ApplyAction(bang::PlayCardAction(sharps));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(law_life() == life_before - 1, "Sharps hits through Spurs");
+  }
+  {
+    // Sidekick: becoming active fires a hit any hand card avoids. Sharps:
+    // the target's Hat cannot help.
+    auto state = make({CN::kHat, CN::kMissed, CN::kWater, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kSidekick, CN::kSharps, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int hat = HandCard(state, 0, CN::kHat);
+    state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kSidekick),
+                                           bang::Target::kOwnRearguard));
+    Require(state.CurrentPhase() == bang::Phase::kPlay,
+            "placing Sidekick does not fire it; its character is not becoming active");
+    state.ApplyAction(bang::kSwapAction);
+    const int water = HandCard(state, 0, CN::kWater);
+    Require(state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 0 &&
+                HasAction(state, bang::AvoidHitAction(water)),
+            "Sidekick fires when its character becomes active; any hand card avoids it");
+    state.ApplyAction(bang::AvoidHitAction(water));
+    Require(state.CurrentPhase() == bang::Phase::kPlay && state.CurrentPlayer() == 1,
+            "play resumes after Sidekick's hit");
+
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kSharps)));
+    Require(!HasAction(state, bang::AvoidHitAction(hat)) &&
+                HasAction(state, bang::AvoidHitAction(HandCard(state, 0, CN::kMissed))),
+            "Sharps: the target's Equipment cannot avoid it, but Missed! can");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -4847,6 +4921,7 @@ int main() {
     TestReinforcementsRandomPlay();
     TestRenegadeBangAndAvoidCards();
     TestRenegadeActionCards();
+    TestSpursSidekickAndSharps();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

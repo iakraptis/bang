@@ -98,6 +98,7 @@ JsonValue LayoutDimsJson(const LayoutDims& dims) {
       {"cardKinds", dims.card_kinds},
       {"actionKinds", dims.action_kinds},
       {"revealReasons", dims.reveal_reasons},
+      {"movementTriggers", dims.movement_triggers},
   };
 }
 
@@ -119,6 +120,9 @@ LayoutDims LayoutDimsFromJson(const JsonValue& value) {
   // Recorded since the Whiskey reveal; earlier layouts had the base three.
   dims.reveal_reasons = object->contains("revealReasons") ? field("revealReasons")
                                                           : kBaseLayoutDims.reveal_reasons;
+  dims.movement_triggers = object->contains("movementTriggers")
+                               ? field("movementTriggers")
+                               : kBaseLayoutDims.movement_triggers;
   return dims;
 }
 

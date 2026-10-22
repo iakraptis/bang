@@ -176,7 +176,8 @@ Reinforcements but cannot be played yet.
 | Avoid Actions: Agility, Feint | Done, with tests |
 | Other Resources: Double Barrel, Howitzer, Indian Chief, Slap | To do |
 | Actions: Ambush, Switch, Union Pacific, Whiskey | Done, with tests |
-| Sharps; Ricochet; Equipment Sidekick, Spurs | To do |
+| Sharps; Equipment Sidekick, Spurs | Done, with tests |
+| Ricochet | To do |
 | Characters | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 

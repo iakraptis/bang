@@ -467,15 +467,18 @@ std::vector<int> GameState::LegalActions() const {
                          pending_hit_->target_position, instance)) ||
           (pending_hit_->response == ResponseKind::kAvoid &&
            ((card.has_avoid && card.kind != CardKind::kResource) ||
-            (TargetHasAbility(pending_hit_->target, pending_hit_->target_position,
+            (pending_hit_->source != CardName::kSharps &&
+             TargetHasAbility(pending_hit_->target, pending_hit_->target_position,
                               CharacterName::kAnnieOakey) &&
              card.has_hit)));
       if (can_respond) {
         result.push_back(AvoidHitAction(instance));
       }
     }
+    // Hit cards only, or Sharps: no abilities or Equipment can help.
     if (needs_additional_card ||
-        pending_hit_->response == ResponseKind::kHitCard) {
+        pending_hit_->response == ResponseKind::kHitCard ||
+        pending_hit_->source == CardName::kSharps) {
       return result;
     }
     if (!pending_hit_->sid_attempted &&
@@ -680,6 +683,25 @@ std::vector<int> GameState::LegalActions() const {
       CanUsePearlHat()) {
     result.push_back(UseAbilityAction(CharacterName::kPearlHat));
   }
+  std::erase_if(result, [&](int action_id) {
+    const ActionKey key = DecodeAction(action_id);
+    if (key.kind != ActionKind::kPlayCard && key.kind != ActionKind::kPlayAsColt &&
+        key.kind != ActionKind::kUseResource) {
+      return false;
+    }
+    if (key.target != static_cast<int>(Target::kOpponentActive) &&
+        key.target != static_cast<int>(Target::kOpponentRearguard)) {
+      return false;
+    }
+    const CardName name = GetCardInstance(key.card_instance).name;
+    if (name == CardName::kSharps ||
+        (key.kind != ActionKind::kPlayAsColt && !GetCard(name).has_hit)) {
+      return false;
+    }
+    const auto [player, position] =
+        ResolveTarget(decision_player_, static_cast<Target>(key.target));
+    return SpursShield(player, position);
+  });
   return result;
 }
 
@@ -1149,6 +1171,8 @@ bool GameState::SwapCharacters(int player, bool voluntary, ResumeKind resume_kin
       HasActiveEquipment(opposing_player, CardName::kClock);
   const bool jango_triggers =
       IsCharacterAbilityActive(opposing_player, CharacterName::kJango);
+  // Sidekick fires when its character becomes active.
+  const bool sidekick_triggers = HasEquipment(player, destination, CardName::kSidekick);
 
   movement_mover_ = player;
   movement_resume_kind_ = resume_kind;
@@ -1162,6 +1186,8 @@ bool GameState::SwapCharacters(int player, bool voluntary, ResumeKind resume_kin
     if (jango_triggers) ordered.push_back(MovementTrigger::kJango);
     if (tom_triggers) ordered.push_back(MovementTrigger::kTomThorn);
   }
+  // After the Clock: with Barrel and Clock on the target, the Clock comes first.
+  if (sidekick_triggers) ordered.push_back(MovementTrigger::kSidekick);
   std::reverse(ordered.begin(), ordered.end());
   movement_triggers_ = std::move(ordered);
   return AdvanceMovementTriggers(false);
@@ -1178,6 +1204,16 @@ bool GameState::AdvanceMovementTriggers(bool resume_when_complete) {
     if (trigger == MovementTrigger::kClock) {
       DrawOne(opposing_player);
       continue;
+    }
+    if (trigger == MovementTrigger::kSidekick) {
+      // An automatic Derringer at the opponent's active: any hand card avoids it.
+      const int target_player = opposing_player;
+      PendingHit hit{movement_mover_, target_player,
+                     players_[static_cast<std::size_t>(target_player)].active_position,
+                     turn_player_, CardName::kSidekick, false, ResponseKind::kAnyHandCard};
+      hit.resume_kind = ResumeKind::kMovement;
+      ActivatePendingHit(hit);
+      return true;
     }
     if (trigger == MovementTrigger::kJango) {
       pending_ability_ = static_cast<int>(CharacterName::kJango);
@@ -1429,6 +1465,8 @@ std::pair<int, int> GameState::ResolveTarget(int actor, Target target) const {
 bool GameState::IsSupportedEquipment(CardName name) const {
   if (IsSupportedResource(name)) return true;
   switch (name) {
+    case CardName::kSidekick:
+    case CardName::kSpurs:
     case CardName::kBank:
     case CardName::kBarrel:
     case CardName::kClock:
@@ -1450,6 +1488,7 @@ bool GameState::IsSupportedBang(CardName name) const {
          name == CardName::kWinchester ||
          // Renegades
          name == CardName::kLightning || name == CardName::kSavage ||
+         name == CardName::kSharps ||
          name == CardName::kSpencer || name == CardName::kWalker ||
          name == CardName::kWhitney;
 }
@@ -1896,7 +1935,8 @@ void GameState::ResolveActionEffect(CardName name, Target target) {
     const auto append = [&](int player, int position) {
       const auto& character = players_[static_cast<std::size_t>(player)]
                                   .positions[static_cast<std::size_t>(position)];
-      if (character.life > 0) {
+      // Spurs keeps a Gatling off its character (Indians! still reaches it).
+      if (character.life > 0 && !(name == CardName::kGatling && SpursShield(player, position))) {
         hits.push_back({turn_player_, player, position, turn_player_, name, false,
                         response});
       }
@@ -2982,9 +3022,23 @@ void GameState::ActivatePendingHit(PendingHit hit) {
     hit.target_position =
         players_[static_cast<std::size_t>(hit.target)].active_position;
   }
+  // Automatic hits (Return Fire, Wild Bill, Tom Thorn, Sidekick, ...) cannot
+  // target a character Spurs shields: the hit simply does not happen.
+  if (hit.source != CardName::kSharps &&
+      SpursShield(hit.target, hit.target_position)) {
+    ContinueAfterResolvedHit(hit);
+    return;
+  }
   pending_hit_ = hit;
   decision_player_ = hit.target;
   phase_ = Phase::kRespondToHit;
+}
+
+bool GameState::SpursShield(int player, int position) const {
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  return position == state.active_position && state.hand.empty() &&
+         state.positions[static_cast<std::size_t>(position)].life > 0 &&
+         HasEquipment(player, position, CardName::kSpurs);
 }
 
 void GameState::ApplyAvoidedHitEffects(const PendingHit& hit) {
@@ -3042,8 +3096,11 @@ void GameState::ApplyPendingDamage() {
           .positions[static_cast<std::size_t>(damage.position)];
   const int character_id = before.character_id;
   const int previous_life = before.life;
+  // Sharps: the target's ability does not react to the damage.
+  const bool sharps = damage.continuation.source == CardName::kSharps;
   const int alan_triggers =
-      LoseLife(damage.player, damage.position, damage.remaining);
+      sharps ? (LoseLife(damage.player, damage.position, damage.remaining), 0)
+             : LoseLife(damage.player, damage.position, damage.remaining);
   const int current_life =
       players_[static_cast<std::size_t>(damage.player)]
           .positions[static_cast<std::size_t>(damage.position)]
@@ -3053,11 +3110,13 @@ void GameState::ApplyPendingDamage() {
     defer_eliminations_ = true;
     BeginAlanPinkertoonHits(damage.player, alan_triggers,
                             damage.continuation);
-    BeginOpponentDamageReaction(
-        damage.player, character_id,
-        std::min(previous_life - current_life,
-                 std::max(0, previous_life - 1)),
-        damage.source_player, damage.continuation);
+    if (!sharps) {
+      BeginOpponentDamageReaction(
+          damage.player, character_id,
+          std::min(previous_life - current_life,
+                   std::max(0, previous_life - 1)),
+          damage.source_player, damage.continuation);
+    }
     defer_eliminations_ = false;
     std::vector<DeferredEffect> elimination_effects;
     elimination_effects.reserve(deferred_effects_.size() -
@@ -3078,9 +3137,9 @@ void GameState::ApplyPendingDamage() {
       std::min(previous_life - current_life, std::max(0, previous_life - 1));
   if (!BeginAlanPinkertoonHits(damage.player, alan_triggers,
                                damage.continuation) &&
-      !BeginOpponentDamageReaction(
-          damage.player, character_id, non_last_life_lost,
-          damage.source_player, damage.continuation)) {
+      (sharps || !BeginOpponentDamageReaction(
+                     damage.player, character_id, non_last_life_lost,
+                     damage.source_player, damage.continuation))) {
     ContinueAfterResolvedHit(damage.continuation);
   }
 }

@@ -27,6 +27,7 @@ struct LayoutDims {
   int card_kinds = 0;
   int action_kinds = 0;
   int reveal_reasons = 0;  // reveal reasons with an input slot (Sid Curry has its own)
+  int movement_triggers = 0;
 
   friend constexpr bool operator==(const LayoutDims&, const LayoutDims&) = default;
 };
@@ -38,11 +39,12 @@ constexpr bool LayoutFits(const LayoutDims& from, const LayoutDims& to) {
          from.card_instances <= to.card_instances && from.sides <= to.sides &&
          from.phases <= to.phases && from.card_kinds <= to.card_kinds &&
          from.action_kinds <= to.action_kinds &&
-         from.reveal_reasons <= to.reveal_reasons;
+         from.reveal_reasons <= to.reveal_reasons &&
+         from.movement_triggers <= to.movement_triggers;
 }
 
 // The layout every checkpoint before the Renegades expansion was trained on.
-inline constexpr LayoutDims kBaseLayoutDims{31, 24, 80, 2, 16, 3, 15, 3};
+inline constexpr LayoutDims kBaseLayoutDims{31, 24, 80, 2, 16, 3, 15, 3, 3};
 
 inline constexpr int kRevealSymbolCount = 4;
 inline constexpr int kResumeKindCapacity = 7;
@@ -110,7 +112,7 @@ constexpr std::array<int, kObsBlockCount> ObservationBlockSizes(const LayoutDims
       c, c, 1, 1, 1, 1, 1, 1, 1, 1, n, n, r, r,
       c, c, 1, 1, 1, 1, 1, 1, 1, 1, n, n, r, r,
       n, r, n, r, n, r, n, r, n, 1, d.reveal_reasons, 1, n, 1, 1, 3, 1, 1, 1, 1,
-      n, r, 1, 1, 1, 1, 1, 1, 1, c, c, 1, 1, 1, 1, c, k, 1, 1, 1, 3, 3,
+      n, r, 1, 1, 1, 1, 1, 1, 1, c, c, 1, 1, 1, 1, c, k, 1, 1, 1, d.movement_triggers, 3,
       k, 1, n, r, n, r, c, 1, 1, n, 1, 1, 2, 1, k, 1, 1, 1, 2, 1, 1, k,
       1, 1, 1, c, n, r, d.sides,
   }};

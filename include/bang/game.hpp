@@ -195,7 +195,7 @@ class GameState {
     kDamageReaction,
     kElimination,
   };
-  enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango };
+  enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango, kSidekick };
 
   struct PendingHit {
     int attacker = -1;
@@ -355,6 +355,9 @@ class GameState {
   // Walker goes back to its owner and Feint takes the BANG! card it avoided.
   void ApplyAvoidedCardMoves(const PendingHit& hit);
   bool CanSwapSide(int player) const;
+  // Spurs: an active character whose owner holds no cards cannot be the
+  // target of hits (Sharps ignores it).
+  bool SpursShield(int player, int position) const;
   void FinishSwitchChoice(bool opponent);
   void ContinueSwitch();
   void FinishSwitchSecond(bool accept);
