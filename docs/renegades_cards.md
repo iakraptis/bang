@@ -172,8 +172,10 @@ Reinforcements but cannot be played yet.
 | Resources: placement, one-turn wait, AC only, used by the character's owner | Done |
 | `use_resource` move (play phase) and avoid Resources answering hits | Done |
 | Gold Pan, Lucky Penny, Buffalo Rifle, Pardner | Done, with tests |
+| BANG!: Lightning, Savage, Spencer, Walker, Whitney | Done, with tests |
+| Avoid Actions: Agility, Feint | Done, with tests |
 | Other Resources: Double Barrel, Howitzer, Indian Chief, Slap | To do |
-| Action, BANG!, and Equipment cards | To do |
+| Sharps; Actions Ambush, Ricochet, Switch, Union Pacific, Whiskey; Equipment Sidekick, Spurs | To do |
 | Characters | To do |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 

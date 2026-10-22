@@ -108,6 +108,28 @@ void EndCurrentTurn(bang::GameState& state) {
   }
 }
 
+// Ends the turn like EndCurrentTurn, but discards down to the hand limit
+// without giving up any card named in `keep`.
+void EndCurrentTurnKeeping(bang::GameState& state, const std::vector<bang::CardName>& keep) {
+  const int current_turn = state.TurnPlayer();
+  state.ApplyAction(bang::kEndPlayAction);
+  while (!state.IsTerminal() && state.TurnPlayer() == current_turn) {
+    const auto legal = state.LegalActions();
+    Require(!legal.empty(), "turn cleanup has a legal discard");
+    int chosen = legal.front();
+    for (const int action : legal) {
+      const auto key = bang::DecodeAction(action);
+      if (key.kind == bang::ActionKind::kDiscardCard &&
+          std::find(keep.begin(), keep.end(),
+                    bang::GetCardInstance(key.card_instance).name) == keep.end()) {
+        chosen = action;
+        break;
+      }
+    }
+    state.ApplyAction(chosen);
+  }
+}
+
 void RequireCardConservation(const bang::GameState& state) {
   std::vector<int> cards;
   cards.insert(cards.end(), state.DiscardPile().begin(), state.DiscardPile().end());
@@ -928,6 +950,98 @@ void TestReinforcementsRandomPlay() {
   }
   Require(finished >= 55, "random Reinforcements games run to completion");
   Require(resources_used > 0, "random play exercises the Resource moves");
+}
+
+bool InHand(const bang::GameState& state, int player, int instance) {
+  const auto& hand = state.Players()[static_cast<std::size_t>(player)].hand;
+  return std::find(hand.begin(), hand.end(), instance) != hand.end();
+}
+
+void TestRenegadeBangAndAvoidCards() {
+  using CN = bang::CardName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  {
+    // The Outlaw attacks: Lightning, Savage, and Spencer against Feint and Agility.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.starting_decks[0] = DeckWithTop(
+        bang::Side::kLaw,
+        {CN::kMissed, CN::kMissed, CN::kFeint, CN::kAgility, CN::kMissed, CN::kMissed}, kMode);
+    config.starting_decks[1] = DeckWithTop(
+        bang::Side::kOutlaw,
+        {CN::kLightning, CN::kSavage, CN::kSpencer, CN::kSpencer, CN::kMissed}, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    EndCurrentTurn(state);  // the Law keeps Feint, Agility, and two Missed!
+
+    const int law_active = state.Players()[0].active_position;
+    const auto law_life = [&] {
+      return state.Players()[0].positions[static_cast<std::size_t>(law_active)].life;
+    };
+    const int lightning = HandCard(state, 1, CN::kLightning);
+    state.ApplyAction(bang::PlayCardAction(lightning));
+    const int feint = HandCard(state, 0, CN::kFeint);
+    Require(HasAction(state, bang::AvoidHitAction(feint)), "Feint avoids like Missed!");
+    state.ApplyAction(bang::AvoidHitAction(feint));
+    Require(InHand(state, 0, lightning) && !InHand(state, 1, lightning),
+            "Feint takes the BANG! card it avoided");
+
+    const int savage = HandCard(state, 1, CN::kSavage);
+    const auto outlaw_hand = state.Players()[1].hand.size();
+    state.ApplyAction(bang::PlayCardAction(savage));
+    Require(state.Players()[1].hand.size() == outlaw_hand,
+            "Savage draws its card before the opponent reacts");
+    const int agility = HandCard(state, 0, CN::kAgility);
+    const auto law_hand = state.Players()[0].hand.size();
+    const int life_before = law_life();
+    state.ApplyAction(bang::AvoidHitAction(agility));
+    Require(state.Players()[0].hand.size() == law_hand && law_life() == life_before,
+            "Agility avoids the hit and draws 1 card");
+    Require(!HasAction(state, bang::PlayCardAction(HandCard(state, 1, CN::kSpencer))),
+            "Lightning allows exactly one more BANG! card");
+    EndCurrentTurnKeeping(state, {CN::kSpencer});
+    EndCurrentTurn(state);
+
+    Require(law_life() == 4, "the Law's active is unhurt");
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kSpencer)));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(law_life() == 2, "Spencer deals 2 to a character with 4 or more life");
+    EndCurrentTurnKeeping(state, {CN::kSpencer});
+    EndCurrentTurn(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kSpencer)));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(law_life() == 1, "Spencer deals 1 to a character below 4 life");
+  }
+  {
+    // The Law attacks: Walker and Whitney against Feint and a Colt.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.starting_decks[0] = DeckWithTop(
+        bang::Side::kLaw,
+        {CN::kWalker, CN::kWhitney, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+    config.starting_decks[1] = DeckWithTop(
+        bang::Side::kOutlaw, {CN::kFeint, CN::kColt, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    const int walker = HandCard(state, 0, CN::kWalker);
+    state.ApplyAction(bang::PlayCardAction(walker));
+    state.ApplyAction(bang::AvoidHitAction(HandCard(state, 1, CN::kFeint)));
+    Require(InHand(state, 0, walker) && !InHand(state, 1, walker),
+            "an avoided Walker returns to its owner, even against Feint");
+
+    const int outlaw_active = state.Players()[1].active_position;
+    const int outlaw_life =
+        state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life;
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kWhitney)));
+    const int colt = HandCard(state, 1, CN::kColt);
+    Require(!HasAction(state, bang::AvoidHitAction(HandCard(state, 1, CN::kMissed))) &&
+                HasAction(state, bang::AvoidHitAction(colt)),
+            "Whitney can only be avoided with a hit card");
+    state.ApplyAction(bang::AvoidHitAction(colt));
+    Require(state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life ==
+                outlaw_life,
+            "a hit card avoids Whitney");
+  }
 }
 
 void TestHatAvoidsAndIsDiscarded() {
@@ -4629,6 +4743,7 @@ int main() {
     TestResourcesWaitAndUse();
     TestAvoidResources();
     TestReinforcementsRandomPlay();
+    TestRenegadeBangAndAvoidCards();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

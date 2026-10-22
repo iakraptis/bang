@@ -438,7 +438,7 @@ std::vector<int> GameState::LegalActions() const {
            CanProvideHit(pending_hit_->target,
                          pending_hit_->target_position, instance)) ||
           (pending_hit_->response == ResponseKind::kAvoid &&
-           (card.name == CardName::kMissed || card.name == CardName::kReturnFire ||
+           ((card.has_avoid && card.kind != CardKind::kResource) ||
             (TargetHasAbility(pending_hit_->target, pending_hit_->target_position,
                               CharacterName::kAnnieOakey) &&
              card.has_hit)));
@@ -845,12 +845,17 @@ void GameState::ApplyAction(int action_id) {
     if (HasCardInHand(decision_player_, action.card_instance)) {
       const bool additional_tex_payment =
           pending_hit_ && pending_hit_->avoids_played > 0;
-      if (!additional_tex_payment &&
-          GetCardInstance(action.card_instance).name ==
-              CardName::kReturnFire) {
+      const CardName name = GetCardInstance(action.card_instance).name;
+      if (!additional_tex_payment && name == CardName::kReturnFire) {
         ResolveReturnFire(action.card_instance);
       } else {
         DiscardFromHand(decision_player_, action.card_instance);
+        if (!additional_tex_payment && name == CardName::kAgility) {
+          DrawOne(decision_player_);
+        }
+        if (!additional_tex_payment && name == CardName::kFeint && pending_hit_) {
+          pending_hit_->feint = true;
+        }
         RecordAvoid(false);
       }
     } else {
@@ -890,6 +895,7 @@ void GameState::StartTurn() {
   swapped_this_turn_ = false;
   bang_cards_played_ = 0;
   ability_used_this_turn_.fill(false);
+  extra_bang_allowance_ = 0;
   phase_ = Phase::kPlay;
   start_turn_step_ = StartTurnStep::kDynamite;
   AdvanceStartTurn();
@@ -1241,7 +1247,8 @@ int GameState::BangCardAllowance(int player) const {
   if (IsCharacterAbilityActive(player, CharacterName::kWestHarding)) {
     return kCardInstanceCount;
   }
-  return IsCharacterAbilityActive(player, CharacterName::kTheStranger) ? 2 : 1;
+  return (IsCharacterAbilityActive(player, CharacterName::kTheStranger) ? 2 : 1) +
+         extra_bang_allowance_;
 }
 
 std::vector<int> GameState::CattleKatieEquipment(int player) const {
@@ -1307,7 +1314,11 @@ bool GameState::IsSupportedBang(CardName name) const {
          name == CardName::kFanning || name == CardName::kPeacemaker ||
          name == CardName::kRemington ||
          name == CardName::kSchofield || name == CardName::kShotgun ||
-         name == CardName::kWinchester;
+         name == CardName::kWinchester ||
+         // Renegades
+         name == CardName::kLightning || name == CardName::kSavage ||
+         name == CardName::kSpencer || name == CardName::kWalker ||
+         name == CardName::kWhitney;
 }
 
 bool GameState::IsSupportedAction(CardName name) const {
@@ -1420,6 +1431,10 @@ void GameState::ResolveBang(int card_instance, Target target) {
   }
   DiscardFromHand(turn_player_, card_instance);
   if (!HasActiveEquipment(turn_player_, CardName::kGunBelt)) ++bang_cards_played_;
+  // Lightning allows one more BANG! card later this turn.
+  if (name == CardName::kLightning) ++extra_bang_allowance_;
+  // Savage's card is drawn before the opponent reacts.
+  if (name == CardName::kSavage) DrawOne(turn_player_);
   const auto [target_player, target_position] = ResolveTarget(turn_player_, target);
   const int avoids_required =
       IsCharacterAbilityActive(turn_player_, CharacterName::kTexKiller) ? 2 : 1;
@@ -1432,13 +1447,18 @@ void GameState::ResolveBang(int card_instance, Target target) {
     for (std::size_t index = 0; index < equipment.size(); ++index) {
       hits.push_back({turn_player_, target_player, target_position, turn_player_, name,
                       false, ResponseKind::kAvoid, avoids_required});
+      hits.back().source_instance = card_instance;
     }
     BeginHitSequence(std::move(hits), turn_player_);
     return;
   }
+  // Whitney can only be avoided with a hit card, like answering Indians!.
+  const ResponseKind response =
+      name == CardName::kWhitney ? ResponseKind::kHitCard : ResponseKind::kAvoid;
   pending_hit_ =
       PendingHit{turn_player_, target_player, target_position, turn_player_, name,
-                 false, ResponseKind::kAvoid, avoids_required};
+                 false, response, avoids_required};
+  pending_hit_->source_instance = card_instance;
   decision_player_ = target_player;
   phase_ = Phase::kRespondToHit;
 }
@@ -2080,6 +2100,7 @@ void GameState::RecordAvoid(bool return_fire, int counter_character) {
 
   const PendingHit original = *pending_hit_;
   pending_hit_.reset();
+  ApplyAvoidedCardMoves(original);
   if (!original.return_fire_pending && original.counter_character < 0) {
     ResolveAvoidedHit(original, std::nullopt);
     return;
@@ -2103,6 +2124,24 @@ void GameState::RecordAvoid(bool return_fire, int counter_character) {
   } else {
     ResolveAvoidedHit(original, counter);
   }
+}
+
+void GameState::ApplyAvoidedCardMoves(const PendingHit& hit) {
+  if (hit.source_instance < 0) return;
+  const auto found = std::find(discard_.begin(), discard_.end(), hit.source_instance);
+  // Gone already, e.g. a Fanning taken by a Feint on an earlier hit.
+  if (found == discard_.end()) return;
+  const CardName name = GetCardInstance(hit.source_instance).name;
+  int receiver = -1;
+  if (name == CardName::kWalker) {
+    receiver = hit.attacker;  // even when a Feint avoided it
+  } else if (hit.feint && GetCard(name).kind == CardKind::kBang) {
+    receiver = hit.target;
+  }
+  if (receiver < 0) return;
+  discard_.erase(found);
+  players_[static_cast<std::size_t>(receiver)].hand.push_back(hit.source_instance);
+  MarkHandCardPublic(receiver, hit.source_instance);
 }
 
 void GameState::BeginSidCurryReveal() {
@@ -2405,7 +2444,11 @@ void GameState::ResolveHit() {
   if (!pending_hit_) throw std::logic_error("there is no pending hit");
   const PendingHit hit = *pending_hit_;
   pending_hit_.reset();
-  BeginDamage(hit.target, hit.target_position, 1, hit.attacker, hit);
+  const int target_life = players_[static_cast<std::size_t>(hit.target)]
+                              .positions[static_cast<std::size_t>(hit.target_position)]
+                              .life;
+  const int damage = hit.source == CardName::kSpencer && target_life >= 4 ? 2 : 1;
+  BeginDamage(hit.target, hit.target_position, damage, hit.attacker, hit);
 }
 
 bool GameState::BeginAlanPinkertoonHits(

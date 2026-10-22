@@ -207,6 +207,10 @@ class GameState {
     bool sid_attempted = false;
     ResumeKind resume_kind = ResumeKind::kPlay;
     int source_character = -1;
+    // The card copy that dealt the hit (Walker returns, Feint takes it).
+    int source_instance = -1;
+    // A Feint helped avoid this hit.
+    bool feint = false;
   };
 
   struct PendingReveal {
@@ -251,6 +255,8 @@ class GameState {
   GameConfig config_;
   // The turn each card copy last entered play, for Resources' one-turn wait.
   std::array<int, kCardInstanceCount> entered_play_turn_{};
+  // Additional BANG! cards allowed this turn (Lightning).
+  int extra_bang_allowance_ = 0;
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -336,6 +342,8 @@ class GameState {
   // not put into play this turn.
   bool IsSupportedResource(CardName name) const;
   bool CanUseResource(int player, int card_instance) const;
+  // Walker goes back to its owner and Feint takes the BANG! card it avoided.
+  void ApplyAvoidedCardMoves(const PendingHit& hit);
   void UseResource(int card_instance, Target target);
   bool IsSupportedBang(CardName name) const;
   bool IsSupportedAction(CardName name) const;
