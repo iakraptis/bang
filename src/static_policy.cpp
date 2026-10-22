@@ -313,13 +313,16 @@ std::vector<float> StaticPolicyLogits(
   for (const ActionFeature& feature : legal_action_features) {
     const std::vector<float> action =
         LinearTanh(network.action_encoder, feature.values);
+    // The actor scores [state, action, state * action, state - action]; each
+    // block is action_hidden wide (64 in v2, 160 in v3).
+    const std::size_t width = action.size();
     float score = network.actor.bias.front();
-    for (std::size_t index = 0; index < state_policy.size(); ++index) {
+    for (std::size_t index = 0; index < width; ++index) {
       score += network.actor.weights[index] * state_policy[index];
-      score += network.actor.weights[64 + index] * action[index];
-      score += network.actor.weights[128 + index] *
+      score += network.actor.weights[width + index] * action[index];
+      score += network.actor.weights[2 * width + index] *
                state_policy[index] * action[index];
-      score += network.actor.weights[192 + index] *
+      score += network.actor.weights[3 * width + index] *
                (state_policy[index] - action[index]);
     }
     logits.push_back(score);
