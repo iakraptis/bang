@@ -87,7 +87,7 @@ constexpr std::array<CardData, kCardNameCount> kCards = {{
      CK::kBang, true, false, false, false},
     {CN::kStampede, "stampede", "Stampede",
      "At turn start, this character swaps active/rearguard position.",
-     CK::kEquipment, false, false, false, true},
+     CK::kEquipment, false, false, true, true},
     {CN::kStealing, "stealing", "Stealing",
      "Steal a random hand card, or discard eligible Equipment in play.",
      CK::kAction, false, false, false, false},

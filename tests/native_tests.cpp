@@ -166,8 +166,10 @@ void TestStaticData() {
       bang::CardName::kKnife};
   const std::array avoids{bang::CardName::kMissed,
                           bang::CardName::kReturnFire};
+  // Stampede prints both the reload cylinder and the always-active arrows.
   const std::array reloadable{bang::CardName::kClock,
                               bang::CardName::kScope,
+                              bang::CardName::kStampede,
                               bang::CardName::kWater};
   const std::array always_active{bang::CardName::kDynamite,
                                  bang::CardName::kRattlesnake,
