@@ -161,16 +161,25 @@ The base game remains the default and must play exactly as before.
    "Backhander", and El Chindi's note says he is immune to "Handover", a name
    no Renegades card carries. Read as Slap until confirmed.
 
-## Open rules questions
+## Rules decisions
 
-To settle (with the rulebook author's FAQ if one exists) before implementing:
+Interpretations settled for this implementation:
 
-- **Sidekick**: does placing it on a character that is already AC trigger it,
-  and does it trigger at setup or on replacement from the reserve?
-- **Spurs** vs. Sidekick: is Sidekick's automatic ⊛ blocked when the target's
-  owner has an empty hand?
-- **King Fishers**: "receives" a Resource: does this cover Resources the
-  opponent places on your AC, and each of your characters separately?
-- **Switch**: may it swap the same side twice, or only up to one swap per side?
-- **Pardner** as ⊛: does it follow BANG! limits? It is green, not red, so
-  presumably not.
+- **Sidekick** triggers only when its character *becomes* AC, i.e. the AC
+  token moves onto it. Placing it on a character that is already AC does not
+  trigger it. A replacement from the reserve enters with no Equipment and does
+  not move the token, so it never triggers there.
+- **Spurs** blocks Sidekick's automatic ⊛ when the target's owner has no cards
+  in hand.
+- **Switch** swaps each side at most once: up to one swap on your side and one
+  on the opponent's.
+- **Pardner** used as ⊛ is not a BANG! card (it is green, not red) and does not
+  count toward the BANG! limit.
+- **King Fishers** (printed text confirmed against a physical copy; the
+  rulebook entry is a copy of Jim Longhair's): whenever **any** character, on
+  either side, receives its first Resource of the turn, however it arrived
+  (including one the opponent places on that character), King Fishers' owner
+  draws 1 card. This counts once per character per turn and works only while
+  King Fishers is AC (the card has no ⇄).
+
+No open rules questions remain for the two-player modes.
