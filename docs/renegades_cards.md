@@ -163,8 +163,8 @@ The base game remains the default and must play exactly as before.
 
 ## Implementation status
 
-Engine support, in the order it lands. Unimplemented cards are dealt in
-Reinforcements but cannot be played yet.
+Engine support, in the order it lands. All 23 new cards are playable; the
+Renegade characters are dealt in Reinforcements but have no abilities yet.
 
 | Area | Status |
 |---|---|
@@ -175,7 +175,7 @@ Reinforcements but cannot be played yet.
 | BANG!: Lightning, Savage, Spencer, Walker, Whitney | Done, with tests |
 | Avoid Actions: Agility, Feint | Done, with tests |
 | Resources: Double Barrel, Howitzer, Indian Chief | Done, with tests |
-| Resource: Slap | To do |
+| Resource: Slap (with Wild Bill reacting per removal) | Done, with tests |
 | Actions: Ambush, Switch, Union Pacific, Whiskey | Done, with tests |
 | Sharps; Equipment Sidekick, Spurs | Done, with tests |
 | Ricochet; hit Resources answering Duel and Indians! | Done, with tests |

@@ -200,6 +200,7 @@ std::string PhaseName(Phase phase) {
     case Phase::kChooseSwitch: return "choose_switch";
     case Phase::kChooseUnionPacific: return "choose_union_pacific";
     case Phase::kChooseAmbush: return "choose_ambush";
+    case Phase::kChooseSlap: return "choose_slap";
   }
   throw std::logic_error("unknown phase");
 }
@@ -225,6 +226,7 @@ std::string PhaseLabel(Phase phase) {
     case Phase::kChooseSwitch: return "Choose which side Switch swaps";
     case Phase::kChooseUnionPacific: return "Choose a deck to draw from";
     case Phase::kChooseAmbush: return "Choose Equipment to discard";
+    case Phase::kChooseSlap: return "Choose what Slap discards";
   }
   throw std::logic_error("unknown phase");
 }
@@ -269,6 +271,10 @@ std::string PhaseHint(Phase phase) {
     case Phase::kChooseAmbush:
       return "Ambush discards 1 card in play from your active character, then "
              "1 from any active character. Either may be skipped.";
+    case Phase::kChooseSlap:
+      return "Slap discards 1 card in play from any active character, then 1 "
+             "card from a hand: yours by choice, the opponent's at random by "
+             "card back. Either may be skipped.";
     case Phase::kDuelResponse:
       return "The Duel goes back and forth: discard a card that can shoot to "
              "keep it running, or concede and lose 1 life.";
@@ -648,7 +654,8 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       } else if (state.CurrentPhase() == Phase::kChooseSwitch) {
         label = accept ? "Swap the other side too" : "Stop here";
         detail = accept ? "Switch's second swap" : "Keep the other side as it is";
-      } else if (state.CurrentPhase() == Phase::kChooseAmbush) {
+      } else if (state.CurrentPhase() == Phase::kChooseAmbush ||
+                 state.CurrentPhase() == Phase::kChooseSlap) {
         label = "Skip";
         detail = "Discard nothing here";
       } else if (!ability.label.empty()) {

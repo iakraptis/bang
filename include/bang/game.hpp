@@ -68,6 +68,7 @@ enum class Phase : std::uint8_t {
   kChooseSwitch,
   kChooseUnionPacific,
   kChooseAmbush,
+  kChooseSlap,
 };
 
 class FastRng {
@@ -274,6 +275,9 @@ class GameState {
   // Ambush: 0 picks from your own AC, 1 from any AC.
   int ambush_stage_ = 0;
   bool ricochet_ = false;
+  int slap_stage_ = 0;
+  // Wild Bill owners whose cards Slap removed; each reacts once Slap ends.
+  std::vector<int> slap_wild_bill_owners_;
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -371,6 +375,10 @@ class GameState {
   // Indians!, even on the turn they entered play.
   std::vector<int> HitResourcesOnActive(int player) const;
   void BeginRicochet();
+  // Slap: 0 picks a card in play on any AC, 1 a hand card of any player.
+  void FinishSlapPick(std::optional<int> card_instance);
+  void FinishSlapHandBack(Side origin);
+  void FinishSlap();
   void FinishSwitchChoice(bool opponent);
   void ContinueSwitch();
   void FinishSwitchSecond(bool accept);

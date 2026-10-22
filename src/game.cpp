@@ -259,6 +259,31 @@ std::vector<int> GameState::LegalActions() const {
     result.push_back(kChooseOpponentSwapAction);
     return result;
   }
+  if (phase_ == Phase::kChooseSlap) {
+    result.push_back(kSkipOptionalAction);
+    if (slap_stage_ == 0) {
+      for (const auto& side : players_) {
+        for (const int instance :
+             side.positions[static_cast<std::size_t>(side.active_position)].equipment) {
+          result.push_back(SelectCardAction(instance));
+        }
+      }
+      return result;
+    }
+    // Your own hand by card, the opponent's by card back (a random card).
+    for (const int instance : players_[static_cast<std::size_t>(turn_player_)].hand) {
+      result.push_back(DiscardCardAction(instance));
+    }
+    const auto& opponent = players_[static_cast<std::size_t>(OtherPlayer(turn_player_))];
+    const auto has_origin = [&](Side origin) {
+      return std::any_of(opponent.hand.begin(), opponent.hand.end(), [origin](int instance) {
+        return GetCardInstance(instance).origin == origin;
+      });
+    };
+    if (has_origin(Side::kLaw)) result.push_back(kChooseLawBackAction);
+    if (has_origin(Side::kOutlaw)) result.push_back(kChooseOutlawBackAction);
+    return result;
+  }
   if (phase_ == Phase::kChooseAmbush) {
     result.push_back(kSkipOptionalAction);
     for (int player = 0; player < kSideCount; ++player) {
@@ -690,7 +715,7 @@ std::vector<int> GameState::LegalActions() const {
       } else if (name == CardName::kPardner || name == CardName::kDoubleBarrel ||
                  name == CardName::kHowitzer) {
         shoot(jack_active || HasActiveEquipment(decision_player_, CardName::kScope));
-      } else if (name == CardName::kIndianChief) {
+      } else if (name == CardName::kIndianChief || name == CardName::kSlap) {
         result.push_back(UseResourceAction(instance, Target::kOwnActive));
       }
     }
@@ -805,6 +830,8 @@ void GameState::ApplyAction(int action_id) {
       FinishSwitchSecond(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseAmbush && action.card_instance == 0) {
       FinishAmbushPick(std::nullopt);
+    } else if (phase_ == Phase::kChooseSlap && action.card_instance == 0) {
+      FinishSlapPick(std::nullopt);
     } else {
       throw std::logic_error("optional action does not match pending effect");
     }
@@ -834,6 +861,8 @@ void GameState::ApplyAction(int action_id) {
         pending_ability_ ==
             static_cast<int>(CharacterName::kBullAnderson)) {
       FinishBullAndersonHand(static_cast<Side>(action.card_instance));
+    } else if (phase_ == Phase::kChooseSlap) {
+      FinishSlapHandBack(static_cast<Side>(action.card_instance));
     } else {
       FinishStealingHand(static_cast<Side>(action.card_instance));
     }
@@ -848,6 +877,8 @@ void GameState::ApplyAction(int action_id) {
       FinishStealingEquipment(action.card_instance);
     } else if (phase_ == Phase::kChooseAmbush) {
       FinishAmbushPick(action.card_instance);
+    } else if (phase_ == Phase::kChooseSlap) {
+      FinishSlapPick(action.card_instance);
     } else if (phase_ == Phase::kChooseAbility &&
                pending_ability_ == static_cast<int>(CharacterName::kCattleKatie)) {
       FinishCattleKatie(action.card_instance);
@@ -889,6 +920,10 @@ void GameState::ApplyAction(int action_id) {
     return;
   }
   if (action.kind == ActionKind::kDiscardCard) {
+    if (phase_ == Phase::kChooseSlap) {
+      FinishSlapPick(action.card_instance);
+      return;
+    }
     if (phase_ == Phase::kChooseAbility &&
         pending_ability_ == static_cast<int>(CharacterName::kPearlHat)) {
       FinishPearlHatCost(action.card_instance);
@@ -1575,7 +1610,7 @@ bool GameState::IsSupportedResource(CardName name) const {
   return name == CardName::kBuffaloRifle || name == CardName::kGoldPan ||
          name == CardName::kLuckyPenny || name == CardName::kPardner ||
          name == CardName::kDoubleBarrel || name == CardName::kHowitzer ||
-         name == CardName::kIndianChief;
+         name == CardName::kIndianChief || name == CardName::kSlap;
 }
 
 bool GameState::CanUseResource(int player, int card_instance) const {
@@ -1614,6 +1649,20 @@ void GameState::UseResource(int card_instance, Target target) {
   if (name == CardName::kBuffaloRifle) {
     // Drawn immediately, before the opponent reacts.
     DrawOne(turn_player_);
+  }
+  if (name == CardName::kSlap) {
+    // A card in play on any AC first (skipped when there is none), then a
+    // hand card of any player.
+    bool any_equipment = false;
+    for (const auto& side : players_) {
+      any_equipment |= !side.positions[static_cast<std::size_t>(side.active_position)]
+                            .equipment.empty();
+    }
+    slap_stage_ = any_equipment ? 0 : 1;
+    slap_wild_bill_owners_.clear();
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseSlap;
+    return;
   }
   if (name == CardName::kIndianChief) {
     // Indians! against the opponent's characters only, AC first.
@@ -3145,6 +3194,79 @@ std::vector<int> GameState::HitResourcesOnActive(int player) const {
     if (card.kind == CardKind::kResource && card.has_hit) result.push_back(instance);
   }
   return result;
+}
+
+void GameState::FinishSlapPick(std::optional<int> card_instance) {
+  if (phase_ != Phase::kChooseSlap) throw std::logic_error("there is no Slap choice pending");
+  if (card_instance && slap_stage_ == 0) {
+    int owner = -1;
+    for (int player = 0; player < kSideCount && owner < 0; ++player) {
+      const int active = players_[static_cast<std::size_t>(player)].active_position;
+      const auto& equipment = players_[static_cast<std::size_t>(player)]
+                                  .positions[static_cast<std::size_t>(active)]
+                                  .equipment;
+      if (std::find(equipment.begin(), equipment.end(), *card_instance) != equipment.end()) {
+        owner = player;
+      }
+    }
+    if (owner < 0) throw std::logic_error("Slap target is not on an AC");
+    const int active = players_[static_cast<std::size_t>(owner)].active_position;
+    RemoveEquipment(owner, active, *card_instance);
+    // Wild Bill reacts when the card was on him.
+    if (owner != turn_player_ && TargetHasAbility(owner, active, CharacterName::kWildBill)) {
+      slap_wild_bill_owners_.push_back(owner);
+    }
+  } else if (card_instance) {
+    DiscardFromHand(turn_player_, *card_instance);
+  }
+  if (slap_stage_ == 0) {
+    slap_stage_ = 1;
+    return;
+  }
+  FinishSlap();
+}
+
+void GameState::FinishSlapHandBack(Side origin) {
+  if (phase_ != Phase::kChooseSlap || slap_stage_ != 1) {
+    throw std::logic_error("there is no Slap hand choice pending");
+  }
+  const int opponent_player = OtherPlayer(turn_player_);
+  auto& opponent = players_[static_cast<std::size_t>(opponent_player)].hand;
+  std::vector<std::size_t> candidates;
+  for (std::size_t index = 0; index < opponent.size(); ++index) {
+    if (GetCardInstance(opponent[index]).origin == origin) candidates.push_back(index);
+  }
+  if (candidates.empty()) throw std::logic_error("selected card back is unavailable");
+  const std::size_t selected = candidates[rng_.USize(candidates.size())];
+  const int card = opponent[selected];
+  opponent.erase(opponent.begin() + static_cast<std::ptrdiff_t>(selected));
+  ForgetPublicHandCard(opponent_player, card);
+  discard_.push_back(card);
+  if (IsCharacterAbilityActive(opponent_player, CharacterName::kWildBill)) {
+    slap_wild_bill_owners_.push_back(opponent_player);
+  }
+  FinishSlap();
+}
+
+void GameState::FinishSlap() {
+  slap_stage_ = 0;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+  // Each removal Wild Bill suffered becomes its own hit on the slapper's AC.
+  std::vector<PendingHit> hits;
+  for (const int owner : slap_wild_bill_owners_) {
+    PendingHit hit{owner, turn_player_,
+                   players_[static_cast<std::size_t>(turn_player_)].active_position,
+                   turn_player_, CardName::kColt, false};
+    hit.source_character = static_cast<int>(CharacterName::kWildBill);
+    hits.push_back(hit);
+  }
+  slap_wild_bill_owners_.clear();
+  if (hits.empty()) return;
+  for (std::size_t index = hits.size() - 1; index > 0; --index) {
+    continuation_hits_.push_back(hits[index]);
+  }
+  ActivatePendingHit(hits.front());
 }
 
 void GameState::BeginRicochet() {

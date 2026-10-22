@@ -1336,6 +1336,59 @@ void TestRicochetAndHitResources() {
   }
 }
 
+void TestSlap() {
+  using CN = bang::CardName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  auto config = DeterministicConfig();
+  config.mode = kMode;
+  // Wild Bill leads the Law: each of his cards Slap removes hits back.
+  config.character_rosters[0] = {static_cast<int>(bang::CharacterName::kWildBill),
+                                 static_cast<int>(bang::CharacterName::kTheStranger)};
+  config.starting_decks[0] = DeckWithTop(
+      bang::Side::kLaw,
+      {CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+  config.starting_decks[1] = DeckWithTop(
+      bang::Side::kOutlaw, {CN::kSlap, CN::kHat, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+  bang::GameState state(config);
+  CompleteSetup(state);
+  EndCurrentTurn(state);
+  const int slap = HandCard(state, 1, CN::kSlap);
+  const int hat = HandCard(state, 1, CN::kHat);
+  state.ApplyAction(bang::PlayCardAction(slap, bang::Target::kOwnRearguard));
+  state.ApplyAction(bang::kSwapAction);
+  state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOpponentActive));
+  EndCurrentTurn(state);
+  EndCurrentTurn(state);
+
+  const auto law_hand = state.Players()[0].hand.size();
+  const int outlaw_active = state.Players()[1].active_position;
+  const int outlaw_life =
+      state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life;
+  state.ApplyAction(bang::UseResourceAction(slap, bang::Target::kOwnActive));
+  Require(state.CurrentPhase() == bang::Phase::kChooseSlap &&
+              HasAction(state, bang::SelectCardAction(hat)),
+          "Slap first takes a card in play from any active character");
+  state.ApplyAction(bang::SelectCardAction(hat));
+  Require(HasAction(state, bang::kChooseLawBackAction) &&
+              HasAction(state, bang::DiscardCardAction(HandCard(state, 1, CN::kMissed))),
+          "then a hand card: the opponent's by card back, or your own");
+  state.ApplyAction(bang::kChooseLawBackAction);
+  Require(state.Players()[0].hand.size() == law_hand - 1 &&
+              std::find(state.DiscardPile().begin(), state.DiscardPile().end(), hat) !=
+                  state.DiscardPile().end(),
+          "Slap discards the Hat and a random Law hand card");
+  Require(state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 1,
+          "Wild Bill hits back for the card taken from him");
+  state.ApplyAction(bang::kTakeHitAction);
+  Require(state.CurrentPhase() == bang::Phase::kRespondToHit && state.CurrentPlayer() == 1,
+          "and again for the hand card");
+  state.ApplyAction(bang::kTakeHitAction);
+  Require(state.Players()[1].positions[static_cast<std::size_t>(outlaw_active)].life ==
+                  outlaw_life - 2 &&
+              state.CurrentPhase() == bang::Phase::kPlay,
+          "both Wild Bill hits land on the slapper's active character");
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5039,6 +5092,7 @@ int main() {
     TestRenegadeActionCards();
     TestSpursSidekickAndSharps();
     TestRicochetAndHitResources();
+    TestSlap();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();
