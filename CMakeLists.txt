@@ -14,7 +14,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BANG_BUILD_TESTS "Build native tests" ON)
 option(BANG_ENABLE_TORCH "Build LibTorch policy and training commands" OFF)
 
-set(BANG_WARNING_OPTIONS -Wall -Wextra -Wpedantic)
+if(MSVC)
+  # /utf-8: sources and console telemetry contain box-drawing characters.
+  set(BANG_WARNING_OPTIONS /W4 /permissive- /utf-8)
+else()
+  set(BANG_WARNING_OPTIONS -Wall -Wextra -Wpedantic)
+endif()
 
 add_library(bang_core
   src/action_space.cpp
@@ -30,6 +35,19 @@ target_include_directories(bang_core PUBLIC include)
 target_compile_options(bang_core PRIVATE ${BANG_WARNING_OPTIONS})
 
 if(BANG_ENABLE_TORCH)
+  if(WIN32)
+    # CUDA 12 on Windows ships only header-only NVTX3, but Torch's config looks
+    # for it in Torch's source tree and then falls back to the removed
+    # nvToolsExt library. Point it at the toolkit's copy.
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+      list(GET CUDAToolkit_INCLUDE_DIRS 0 BANG_CUDA_INCLUDE_DIR)
+      if(EXISTS "${BANG_CUDA_INCLUDE_DIR}/nvtx3")
+        set(USE_SYSTEM_NVTX ON)
+        set(nvtx3_dir "${BANG_CUDA_INCLUDE_DIR}" CACHE PATH "NVTX3 include root")
+      endif()
+    endif()
+  endif()
   find_package(Torch REQUIRED)
   separate_arguments(TORCH_CXX_FLAGS_LIST NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
   target_sources(bang_core PRIVATE
@@ -112,5 +130,14 @@ if(BANG_BUILD_TESTS)
         "$<TARGET_FILE:bang_duel>"
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
+    if(WIN32)
+      # Windows has no rpath; the Torch DLLs (~4 GB with CUDA) are found on
+      # PATH rather than copied next to every build.
+      set_tests_properties(bang_tests training_cli_tests PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${TORCH_INSTALL_PREFIX}/lib")
+      # Telemetry is UTF-8; Windows Python otherwise decodes pipes as cp1252.
+      set_property(TEST training_cli_tests APPEND PROPERTY
+        ENVIRONMENT_MODIFICATION "PYTHONUTF8=set:1")
+    endif()
   endif()
 endif()

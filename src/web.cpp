@@ -24,13 +24,6 @@
 #include <utility>
 #include <vector>
 
-#ifndef __EMSCRIPTEN__
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
-
 #include "bang/action_space.hpp"
 #include "bang/game.hpp"
 #include "bang/heuristic.hpp"
@@ -43,8 +36,73 @@
 #include "bang/policy_network.hpp"
 #endif
 
+// Platform sockets come last so Windows macros cannot rewrite project names.
+#ifndef __EMSCRIPTEN__
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+#endif
+
 namespace bang {
 namespace {
+
+#ifndef __EMSCRIPTEN__
+#ifdef _WIN32
+using SocketHandle = SOCKET;
+constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
+
+void CloseSocket(SocketHandle socket) { ::closesocket(socket); }
+
+std::string SocketErrorText() {
+  return "winsock error " + std::to_string(::WSAGetLastError());
+}
+
+bool SocketCallInterrupted() { return ::WSAGetLastError() == WSAEINTR; }
+
+void InitializeSockets() {
+  WSADATA data{};
+  if (::WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+    throw std::runtime_error("WSAStartup failed");
+  }
+}
+#else
+using SocketHandle = int;
+constexpr SocketHandle kInvalidSocket = -1;
+
+void CloseSocket(SocketHandle socket) { ::close(socket); }
+
+std::string SocketErrorText() { return std::strerror(errno); }
+
+bool SocketCallInterrupted() { return errno == EINTR; }
+
+void InitializeSockets() {
+  // A browser closing its tab mid-response must not kill the server.
+  std::signal(SIGPIPE, SIG_IGN);
+}
+#endif
+
+// Winsock takes int lengths; one request chunk always fits.
+long long ReceiveSome(SocketHandle client, char* data, std::size_t size) {
+  return ::recv(client, data, static_cast<int>(size), 0);
+}
+
+long long SendSome(SocketHandle client, const char* data, std::size_t size) {
+  return ::send(client, data, static_cast<int>(std::min<std::size_t>(size, 1 << 30)), 0);
+}
+#endif
 
 constexpr int kMaxBotSteps = 2000;
 constexpr std::size_t kMaxLogEntries = 120;
@@ -1357,12 +1415,12 @@ std::optional<std::size_t> ContentLength(const std::string& headers) {
   return static_cast<std::size_t>(std::stoull(lower.substr(start, end - start)));
 }
 
-HttpRequest ReadRequest(int client) {
+HttpRequest ReadRequest(SocketHandle client) {
   std::string buffer;
   std::array<char, 4096> chunk{};
   std::size_t header_end = std::string::npos;
   while ((header_end = buffer.find("\r\n\r\n")) == std::string::npos) {
-    const ssize_t count = ::recv(client, chunk.data(), chunk.size(), 0);
+    const long long count = ReceiveSome(client, chunk.data(), chunk.size());
     if (count <= 0) throw std::runtime_error("connection closed during headers");
     buffer.append(chunk.data(), static_cast<std::size_t>(count));
     if (buffer.size() > kMaxRequestBytes) {
@@ -1376,7 +1434,7 @@ HttpRequest ReadRequest(int client) {
     throw std::invalid_argument("request body is too large");
   }
   while (buffer.size() < body_start + body_size) {
-    const ssize_t count = ::recv(client, chunk.data(), chunk.size(), 0);
+    const long long count = ReceiveSome(client, chunk.data(), chunk.size());
     if (count <= 0) throw std::runtime_error("connection closed during body");
     buffer.append(chunk.data(), static_cast<std::size_t>(count));
   }
@@ -1389,11 +1447,11 @@ HttpRequest ReadRequest(int client) {
   return request;
 }
 
-void SendAll(int client, std::string_view data) {
+void SendAll(SocketHandle client, std::string_view data) {
   while (!data.empty()) {
-    const ssize_t count = ::send(client, data.data(), data.size(), 0);
+    const long long count = SendSome(client, data.data(), data.size());
     if (count <= 0) {
-      throw std::runtime_error("send failed: " + std::string(std::strerror(errno)));
+      throw std::runtime_error("send failed: " + SocketErrorText());
     }
     data.remove_prefix(static_cast<std::size_t>(count));
   }
@@ -1407,7 +1465,7 @@ std::string StatusText(int status) {
   return "Internal Server Error";
 }
 
-void SendResponse(int client, int status, std::string_view content_type,
+void SendResponse(SocketHandle client, int status, std::string_view content_type,
                   const std::string& body) {
   std::ostringstream headers;
   headers << "HTTP/1.1 " << status << ' ' << StatusText(status) << "\r\n"
@@ -1420,7 +1478,7 @@ void SendResponse(int client, int status, std::string_view content_type,
   SendAll(client, body);
 }
 
-void SendJson(int client, int status, const JsonValue& value) {
+void SendJson(SocketHandle client, int status, const JsonValue& value) {
   SendResponse(client, status, "application/json; charset=utf-8", value.Dump());
 }
 
@@ -1472,7 +1530,7 @@ std::string ContentType(const std::filesystem::path& path) {
   return "application/octet-stream";
 }
 
-void HandleClient(int client, BangWebApp& app, const WebConfig& config) {
+void HandleClient(SocketHandle client, BangWebApp& app, const WebConfig& config) {
   try {
     const HttpRequest request = ReadRequest(client);
     if (request.method == "GET" && request.path == "/api/health") {
@@ -1516,26 +1574,30 @@ void HandleClient(int client, BangWebApp& app, const WebConfig& config) {
   }
 }
 
-int BindServer(const WebConfig& config) {
-  const int server = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (server < 0) throw std::runtime_error("socket creation failed");
+SocketHandle BindServer(const WebConfig& config) {
+  const SocketHandle server = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (server == kInvalidSocket) throw std::runtime_error("socket creation failed");
+#ifndef _WIN32
+  // On Windows SO_REUSEADDR lets a second process steal a bound port, and a
+  // just-closed listener is rebindable by default, so it is POSIX-only.
   const int reuse = 1;
   ::setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(static_cast<std::uint16_t>(config.port));
   if (::inet_pton(AF_INET, config.host.c_str(), &address.sin_addr) != 1) {
-    ::close(server);
+    CloseSocket(server);
     throw std::invalid_argument("host must be an IPv4 address");
   }
   if (::bind(server, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
-    const std::string message = std::strerror(errno);
-    ::close(server);
+    const std::string message = SocketErrorText();
+    CloseSocket(server);
     throw std::runtime_error("bind failed: " + message);
   }
   if (::listen(server, 16) != 0) {
-    const std::string message = std::strerror(errno);
-    ::close(server);
+    const std::string message = SocketErrorText();
+    CloseSocket(server);
     throw std::runtime_error("listen failed: " + message);
   }
   return server;
@@ -2171,13 +2233,13 @@ int RunWebServer(const WebConfig& config) {
     throw std::runtime_error("web/index.html was not found in static directory " +
                              config.static_dir.string());
   }
-  std::signal(SIGPIPE, SIG_IGN);
+  InitializeSockets();
   BangWebApp app(config);
-  const int server = BindServer(config);
+  const SocketHandle server = BindServer(config);
   sockaddr_in actual{};
   socklen_t actual_size = sizeof(actual);
   if (::getsockname(server, reinterpret_cast<sockaddr*>(&actual), &actual_size) != 0) {
-    ::close(server);
+    CloseSocket(server);
     throw std::runtime_error("getsockname failed");
   }
   const int port = ntohs(actual.sin_port);
@@ -2189,11 +2251,11 @@ int RunWebServer(const WebConfig& config) {
   while (true) {
     sockaddr_in client_address{};
     socklen_t client_size = sizeof(client_address);
-    const int client = ::accept(
+    const SocketHandle client = ::accept(
         server, reinterpret_cast<sockaddr*>(&client_address), &client_size);
-    if (client < 0) {
-      if (errno == EINTR) continue;
-      std::cerr << "accept failed: " << std::strerror(errno) << '\n';
+    if (client == kInvalidSocket) {
+      if (SocketCallInterrupted()) continue;
+      std::cerr << "accept failed: " << SocketErrorText() << '\n';
       continue;
     }
     try {
@@ -2201,7 +2263,7 @@ int RunWebServer(const WebConfig& config) {
     } catch (const std::exception& error) {
       std::cerr << "client handling failed: " << error.what() << '\n';
     }
-    ::close(client);
+    CloseSocket(client);
   }
 #endif
 }
