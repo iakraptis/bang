@@ -100,10 +100,19 @@
   const ENGINE_CALL = /^([a-z_]+)\(([^,)]*)(?:,([^)]*))?\)$/;
   const CEREMONY_VERBS = new Set(["play", "play_as_colt", "avoid"]);
 
+  // The server trims its log to the most recent entries, so once it is full
+  // two states have the same length however much happened between them.
+  // Entries carry a session-wide sequence number for exactly that reason;
+  // the length comparison is only a fallback for servers that predate it.
   function newLogEntries(prev, next) {
-    const before = prev?.log?.length ?? 0;
+    const before = prev?.log || [];
     const after = next?.log || [];
-    return before <= after.length ? after.slice(before) : [];
+    const sequenced = entries => entries.every(entry => Number.isFinite(entry?.sequence));
+    if (before.length && sequenced(before) && sequenced(after)) {
+      const last = Math.max(...before.map(entry => entry.sequence));
+      return after.filter(entry => entry.sequence > last);
+    }
+    return before.length <= after.length ? after.slice(before.length) : [];
   }
 
   function newDiscards(prev, next) {

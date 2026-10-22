@@ -10,7 +10,7 @@
   const tipEl = document.querySelector("#tooltip");
   const { effectiveDropZone } = window.BangTargeting;
   const { planPlays, playCaption, motifFor, characterEvents, seatedCharacters,
-          TIMING: FX_TIMING } = window.BangCardFx;
+          newLogEntries, TIMING: FX_TIMING } = window.BangCardFx;
   const { buildHistory } = window.BangHistory;
 
   let game = null;
@@ -25,6 +25,8 @@
   let endTurnSpotlight = false; // no card/character plays left → spotlight end turn
   let hoverPreview = null; // card instance hovered for drop-zone preview
   let fxBusyUntil = 0; // performance.now() the running play ceremonies finish at
+  let replaying = false;  // stepping through the opponent's turn a move at a time
+  let replaySkip = false; // the player asked to jump to the end of it
   let stagingTimer = null; // clears the class that steps the phase pill aside
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   /* A finger is not a small cursor. It cannot hover, so nothing may hide
@@ -1061,7 +1063,8 @@
       </main>
       ${logDrawer()}
       ${historyOverlay()}
-      ${winnerOverlay()}`;
+      ${winnerOverlay()}
+      ${replaying ? `<div class="replay-hint" role="status">Opponent's turn · click or press Space to skip</div>` : ""}`;
     renderedGame = game;
     voxelStage.attach();
     voxelStage.place();
@@ -1480,6 +1483,64 @@
     retire(el, delay + life + 500);
   }
 
+  /* An arrow from the staged card to the character it affects: drawn out from
+     the card, held while the card is on stage, then faded. It bends slightly
+     so it never runs straight through the plaque under the card. */
+  function aimArrow(from, to, tone, delay, hold, { still = false } = {}) {
+    if (!from?.width || !to?.width) return;
+    const sx = from.left + from.width / 2;
+    const sy = from.top + from.height / 2;
+    const tx = to.left + to.width / 2;
+    const ty = to.top + to.height / 2;
+    const dist = Math.hypot(tx - sx, ty - sy);
+    const ux = (tx - sx) / (dist || 1);
+    const uy = (ty - sy) / (dist || 1);
+    // Leave the card from its edge and stop short of the character's middle.
+    const startPad = Math.min(from.width, from.height) * 0.55;
+    const endPad = Math.min(to.width, to.height) * 0.3;
+    const length = dist - startPad - endPad;
+    if (length < 24) return;
+    const x1 = sx + ux * startPad, y1 = sy + uy * startPad;
+    const x2 = tx - ux * endPad, y2 = ty - uy * endPad;
+    const bend = Math.min(56, length * 0.16);
+    const cx = (x1 + x2) / 2 - uy * bend, cy = (y1 + y2) / 2 + ux * bend;
+    // The head points along the curve's final tangent (control point → tip).
+    const hx = x2 - cx, hy = y2 - cy;
+    const hl = Math.hypot(hx, hy) || 1;
+    const ax = hx / hl, ay = hy / hl;
+    const size = 16;
+    const head = [
+      [x2 + ax * size * 0.35, y2 + ay * size * 0.35],
+      [x2 - ax * size + ay * size * 0.6, y2 - ay * size - ax * size * 0.6],
+      [x2 - ax * size - ay * size * 0.6, y2 - ay * size + ax * size * 0.6],
+    ].map(point => point.map(value => value.toFixed(1)).join(",")).join(" ");
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", `fx-arrow ${tone ? `tone-${tone}` : ""}`);
+    svg.innerHTML = `<path class="fx-arrow-line" d="M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}"/>
+      <polygon class="fx-arrow-head" points="${head}"/>`;
+    fxRoot.appendChild(svg);
+
+    // Still arrows (reduced motion) only fade; otherwise the line draws out
+    // from the card and the head pops on at the tip.
+    const draw = still ? 160 : 300;
+    if (!still) {
+      const line = svg.querySelector(".fx-arrow-line");
+      const total = line.getTotalLength();
+      line.style.strokeDasharray = `${total}`;
+      line.animate([{ strokeDashoffset: total }, { strokeDashoffset: 0 }],
+                   { duration: draw, delay, easing: "cubic-bezier(.3,.8,.3,1)", fill: "both" });
+      svg.querySelector(".fx-arrow-head").animate(
+        [{ opacity: 0, transform: "scale(.4)" }, { opacity: 1, transform: "scale(1)" }],
+        { duration: 160, delay: delay + draw - 60, easing: "ease-out", fill: "both" });
+    }
+    const life = draw + hold + 320;
+    svg.animate([{ opacity: 0 }, { opacity: 1, offset: draw / life },
+                 { opacity: 1, offset: (draw + hold) / life }, { opacity: 0 }],
+                { duration: life, delay, fill: "both" }).onfinish = () => svg.remove();
+    retire(svg, delay + life + 600);
+  }
+
   /* Motif signatures: what happens around the card while it is on stage, and
      what lands on the character it was aimed at. */
   const BURSTS = {
@@ -1629,6 +1690,10 @@
         ? app.querySelector(`[data-zone="${effectiveDropZone(plan.zone, next)}"] .char`)
         : null;
       const targetRect = targetEl?.getBoundingClientRect() || stage;
+      // A block protects its own side; everything else is aimed at someone.
+      if (targetEl && plan.verb !== "avoid") {
+        aimArrow(stage, targetRect, motif.tone, plan.impactAt - 120, plan.holdMs + 260);
+      }
       (BURSTS[motif.burst] || BURSTS.none)(stage, targetRect, plan.impactAt);
       if (motif.shake) tableShake(plan.impactAt + 120);
       if (plan.verb === "avoid") calloutBanner("MISSED!", "missed", plan.impactAt);
@@ -1657,6 +1722,50 @@
     stagingTimer = setTimeout(() => app.classList.remove("staging"), until);
     fxBusyUntil = Math.max(fxBusyUntil, performance.now() + until);
     return handled;
+  }
+
+  /* Reduced motion keeps the information and drops the movement: each played
+     card fades in on centre stage with its plaque and an arrow to whatever it
+     affects, holds long enough to read, and fades out. Nothing flies, flips,
+     bursts, or shakes. */
+  const STILL_HOLD = { opponent: 1300, own: 650, gap: 150 };
+
+  function runStillCeremonies(plans, next) {
+    if (!plans.length) return;
+    const felt = app.querySelector(".table-felt")?.getBoundingClientRect();
+    if (!felt?.width) return;
+    const stage = centreStageRect(felt);
+    let at = 0;
+    for (const plan of plans) {
+      const hold = plan.isHuman ? STILL_HOLD.own : STILL_HOLD.opponent;
+      const tone = plan.motif.tone;
+      const card = document.createElement("div");
+      card.className = `fx-ghost ${tone ? `tone-${tone}` : ""}`;
+      Object.assign(card.style, {
+        left: `${stage.left}px`, top: `${stage.top}px`,
+        width: `${stage.width}px`, height: `${stage.height}px`,
+      });
+      card.innerHTML = ghostArt(plan.card.key);
+      fxRoot.appendChild(card);
+      const life = hold + 360;
+      card.animate([{ opacity: 0 }, { opacity: 1, offset: .12 }, { opacity: 1, offset: .88 }, { opacity: 0 }],
+                   { duration: life, delay: at, fill: "both" }).onfinish = () => card.remove();
+      retire(card, at + life + 600);
+
+      const who = plan.isHuman ? "You" : `${next.players[plan.player]?.side || "Opponent"}`;
+      stageCaption(stage, playCaption(plan, who), plan.card.name || plan.key, tone, at, hold);
+      const targetEl = plan.zone
+        ? app.querySelector(`[data-zone="${effectiveDropZone(plan.zone, next)}"] .char`)
+        : null;
+      if (targetEl && plan.verb !== "avoid") {
+        aimArrow(stage, targetEl.getBoundingClientRect(), tone, at, hold, { still: true });
+      }
+      at += life + STILL_HOLD.gap;
+    }
+    app.classList.add("staging");
+    clearTimeout(stagingTimer);
+    stagingTimer = setTimeout(() => app.classList.remove("staging"), at);
+    fxBusyUntil = Math.max(fxBusyUntil, performance.now() + at);
   }
 
   // Hide the real element while its ghost is in flight.
@@ -1834,11 +1943,6 @@
       for (const position of player.positions) (position.equipment || []).forEach(register);
     }
     return kinds;
-  }
-
-  // Log entries that appeared between two states (the server trims long logs).
-  function newLogEntries(prev, next) {
-    return prev.log.length <= next.log.length ? next.log.slice(prev.log.length) : [];
   }
 
   /* ---------- match stats, accumulated from the per-state diffs ---------- */
@@ -2030,7 +2134,7 @@
     // The combo lands a beat after the last card that caused it, so it reads
     // as the consequence rather than as part of the play.
     comboCallout(damage, Math.max(320, ...plans.map(plan => plan.impactAt + 340)));
-    if (reducedMotion) return;
+    if (reducedMotion) { runStillCeremonies(plans, next); return; }
     const me = next.humanPlayer;
     const newRect = selector => app.querySelector(selector)?.getBoundingClientRect();
     const instanceEl = instance => app.querySelector(`[data-instance="${instance}"]`);
@@ -2538,6 +2642,7 @@
 
   /* ---------- click handling (buttons, zones, characters) ---------- */
   document.addEventListener("click", event => {
+    if (replaying) { skipReplay(); return; }
     const actionButton = event.target.closest("[data-action]");
     if (actionButton) { applyAction(Number(actionButton.dataset.action)); return; }
     if (dragRoot.querySelector(".chooser") && !event.target.closest(".chooser")) { closeChooser(); return; }
@@ -2589,6 +2694,11 @@
   });
 
   document.addEventListener("keydown", event => {
+    if (replaying && [" ", "Enter", "Escape"].includes(event.key)) {
+      event.preventDefault();
+      skipReplay();
+      return;
+    }
     if (event.key === "Escape") {
       if (historyOpen) { historyOpen = false; render(); return; }
       closeChooser();
@@ -2640,11 +2750,18 @@
     busy = true;
     closeChooser();
     render();
+    const before = game;
+    let reveals = [];
     try {
-      game = await api(`/api/session/${encodeURIComponent(game.sessionId)}/action`, {
+      const response = await api(`/api/session/${encodeURIComponent(game.sessionId)}/action`, {
         method: "POST", body: JSON.stringify({ action: actionId }),
       });
+      const frames = response.replay || [];
+      delete response.replay;
       selectedCard = null;
+      if (frames.length) await playReplay(frames);
+      else reveals = newLogEntries(before, response).filter(isReveal);
+      game = response;
       localStorage.setItem("bangDuelSession", game.sessionId);
     } catch (error) {
       if (/unknown session/i.test(error.message)) {
@@ -2663,7 +2780,75 @@
     } finally {
       busy = false;
       render();
+      // A reply with no opponent moves still says what a reveal just did.
+      if (reveals.length) narrateMoves(reveals, game);
     }
+  }
+
+  /* ---------- replaying the opponent's turn ----------
+     The server answers a move with the player's view after it and after
+     every automatic move that followed, so the opponent's turn arrives as a
+     sequence rather than a jump to where it ended. Each step renders on its
+     own, which lets the usual diff animations (play ceremonies, damage,
+     deaths) run for that single move, and then holds long enough to read it.
+     A click or Space/Enter/Escape skips to the end. */
+
+  const REPLAY_PAUSE = { card: 650, move: 420, quiet: 140 };
+  const CEREMONY_VERB = /^(?:play|play_as_colt|avoid)\(/;
+
+  async function playReplay(frames) {
+    replaying = true;
+    replaySkip = false;
+    try {
+      for (const frame of frames) {
+        if (replaySkip) break;
+        const prev = game;
+        game = frame;
+        render();
+        const moves = opponentMoves(prev, frame);
+        narrateMoves(moves, frame);
+        const pause = !moves.length ? REPLAY_PAUSE.quiet
+          : moves.some(entry => CEREMONY_VERB.test(entry.engineText || "")) ? REPLAY_PAUSE.card
+          : REPLAY_PAUSE.move;
+        await replayWait(Math.max(0, fxBusyUntil - performance.now()) + pause);
+      }
+    } finally {
+      replaying = false;
+    }
+  }
+
+  // What is worth saying about one step: the opponent's moves, and every
+  // reveal the engine resolved, whoever's effect it was — several effects
+  // reveal for the same Barrel symbol, so the board alone cannot tell them apart.
+  const isReveal = entry => (entry.engineText || "").startsWith("reveal(");
+  function opponentMoves(prev, next) {
+    return newLogEntries(prev, next).filter(entry => isReveal(entry) ||
+      (entry.player !== null && entry.player !== next.humanPlayer &&
+       !(entry.engineText || "").startsWith("death(")));
+  }
+
+  // Card plays get a ceremony of their own; say everything else in words.
+  function narrateMoves(moves, state) {
+    const felt = app.querySelector(".table-felt")?.getBoundingClientRect();
+    if (!felt?.width) return;
+    const stage = centreStageRect(felt);
+    moves.filter(entry => !CEREMONY_VERB.test(entry.engineText || ""))
+      .forEach((entry, index) => stageCaption(
+        stage, state.players[entry.player]?.side || "Opponent", entry.text,
+        "neutral", index * 160, REPLAY_PAUSE.move));
+  }
+
+  async function replayWait(ms) {
+    const until = performance.now() + ms;
+    while (!replaySkip && performance.now() < until) {
+      await sleep(Math.min(60, until - performance.now()));
+    }
+  }
+
+  function skipReplay() {
+    if (!replaying) return;
+    replaySkip = true;
+    fxRoot.replaceChildren(); // drop the ceremonies still in flight
   }
 
   async function tryRecoverSession() {

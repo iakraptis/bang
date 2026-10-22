@@ -608,6 +608,33 @@ body.dragging * { cursor: grabbing !important; }
    out of the felt now, so it no longer has to get out of the way entirely. */
 .app-shell.staging .phase-pill { opacity: .5; }
 
+/* The aim arrow: a full-viewport overlay under the staged card (z 5) and its
+   plaque (z 9), so the card always reads on top of its own arrow. */
+.fx-arrow {
+  position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 4;
+  pointer-events: none; overflow: visible;
+}
+.fx-arrow-line {
+  fill: none; stroke: var(--tone); stroke-width: 5; stroke-linecap: round;
+  filter: drop-shadow(0 0 6px var(--tone)) drop-shadow(0 2px 3px rgba(0,0,0,.6));
+}
+.fx-arrow-head {
+  fill: var(--tone); transform-box: fill-box; transform-origin: center;
+  filter: drop-shadow(0 0 6px var(--tone)) drop-shadow(0 2px 3px rgba(0,0,0,.6));
+}
+
+/* Shown while the opponent's turn plays back; any click or key skips it. */
+.replay-hint {
+  position: fixed; left: 50%; top: calc(var(--topbar-h) + 10px); z-index: 180;
+  transform: translateX(-50%); padding: 6px 14px; border-radius: 999px;
+  background: rgba(20, 11, 8, .82); border: 1px solid rgba(199,155,70,.55);
+  color: var(--gold-bright, #e8bf6a); font-size: 12px; letter-spacing: .02em;
+  pointer-events: none; white-space: nowrap;
+  animation: replay-hint-pulse 1.6s ease-in-out infinite;
+}
+@keyframes replay-hint-pulse { 50% { opacity: .65; } }
+@media (prefers-reduced-motion: reduce) { .replay-hint { animation: none; } }
+
 .fx-flash, .fx-ring, .fx-bit, .fx-tracer, .fx-plaque {
   position: fixed; z-index: 4; pointer-events: none; will-change: transform, opacity;
 }

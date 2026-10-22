@@ -712,12 +712,57 @@ JsonValue ActionJson(const GameState& state, int action_id) {
   return result;
 }
 
+// What a card flipped off a deck did, in words. Several effects reveal for the
+// same "Barrel" symbol (a Barrel card, Sid Curry's ability), so the line names
+// the effect, the card, whose deck it came from, and the outcome.
+std::string RevealText(const GameState::RevealEvent& event) {
+  const auto& card = GetCard(GetCardInstance(event.card_instance).name);
+  std::string side(SideName(static_cast<Side>(event.player)));
+  if (!side.empty()) {
+    side.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(side.front())));
+  }
+  const std::string drawn =
+      std::string(card.display_name) + " from the " + side + " deck";
+  switch (event.reason) {
+    case GameState::RevealReason::kSidCurry:
+      return "Sid Curry's ability reveals " + drawn +
+             (event.triggered
+                  ? ": a Barrel symbol, so the hit is avoided and countered at "
+                    "the attacker's active character"
+                  : ": no Barrel symbol, so the hit stands");
+    case GameState::RevealReason::kBarrel:
+      return "Barrel card reveals " + drawn +
+             (event.triggered ? ": a Barrel symbol, so the hit is avoided"
+                              : ": no Barrel symbol, so the hit stands");
+    case GameState::RevealReason::kDynamite:
+      return "Dynamite reveals " + drawn +
+             (event.triggered ? ": it explodes for 3 life"
+                              : ": no Dynamite symbol, so it passes on");
+    case GameState::RevealReason::kRattlesnake:
+      return "Rattlesnake reveals " + drawn +
+             (event.triggered ? ": a Snake symbol, so it bites for 1 life"
+                              : ": no Snake symbol, so no bite");
+  }
+  return "Reveals " + drawn;
+}
+
+// The side whose effect it was: Sid Curry reveals from the attacker's deck;
+// every other reveal comes off the affected side's own deck.
+int RevealOwner(const GameState::RevealEvent& event) {
+  return event.reason == GameState::RevealReason::kSidCurry
+             ? 1 - event.player
+             : event.player;
+}
+
 std::string ReadFile(const std::filesystem::path& path);
 
 struct LogEntry {
   int player = -1;
   std::string text;
   std::string engine_text;
+  // Monotonic across the session, unlike the entry's position in a log the
+  // server trims, so the browser can tell exactly which entries are new.
+  std::uint64_t sequence = 0;
 };
 
 struct CharacterSnapshot {
@@ -748,6 +793,7 @@ struct WebSession {
   GameState state;
   FastRng bot_rng;
   std::vector<LogEntry> log;
+  std::uint64_t next_log_sequence = 0;
   // Every action applied to `state`, human and bot alike. Replaying this
   // list against a fresh GameState with the same seed reproduces the game,
   // which is how sessions are restored after a server restart.
@@ -874,9 +920,10 @@ class BangWebApp {
                                    ? static_cast<std::uint64_t>(*requested_seed)
                                    : session_rng_.NextU64() & 0x7fffffffULL;
     auto session = std::make_unique<WebSession>(NewSessionId(), seed, human, characters);
-    session->log.push_back({-1, "New duel. You command the " +
-                                    std::string(SideName(static_cast<Side>(human))) +
-                                    " side.", ""});
+    AppendLog(*session, -1,
+              "New duel. You command the " +
+                  std::string(SideName(static_cast<Side>(human))) + " side.",
+              "");
     AdvanceAutomaticActions(*session);
     session->last_touch = ++touch_counter_;
     SaveSession(*session);
@@ -905,10 +952,18 @@ class BangWebApp {
       throw std::invalid_argument("action is not legal in the current state");
     }
     ApplyLoggedAction(session, session.human_player, action_id, false);
-    AdvanceAutomaticActions(session);
+    // The player's view after their own move and after each automatic one, so
+    // the browser can play the opponent's turn back a move at a time instead
+    // of jumping straight to where it ended.
+    JsonValue::Array replay{Serialize(session)};
+    AdvanceAutomaticActions(session, &replay);
     TrimLog(session);
     SaveSession(session);
-    return Serialize(session);
+    if (replay.size() <= 1) return Serialize(session);
+    JsonValue::Object result =
+        std::get<JsonValue::Object>(Serialize(session).storage());
+    result["replay"] = std::move(replay);
+    return result;
   }
 
   WebSession& SessionForTest(const std::string& id) { return GetSession(id); }
@@ -960,6 +1015,7 @@ class BangWebApp {
           {"player", entry.player},
           {"text", entry.text},
           {"engine", entry.engine_text},
+          {"sequence", static_cast<double>(entry.sequence)},
       });
     }
     const JsonValue journal = JsonValue::Object{
@@ -1061,6 +1117,14 @@ class BangWebApp {
               restored.engine_text = *engine;
             }
           }
+          restored.sequence = session->next_log_sequence;
+          if (const auto found = entry.find("sequence"); found != entry.end()) {
+            if (const auto* number = std::get_if<double>(&found->second.storage())) {
+              restored.sequence = static_cast<std::uint64_t>(*number);
+            }
+          }
+          session->next_log_sequence =
+              std::max(session->next_log_sequence, restored.sequence + 1);
           session->log.push_back(std::move(restored));
         }
       }
@@ -1072,6 +1136,12 @@ class BangWebApp {
       std::filesystem::remove(path, ignored);
       return nullptr;
     }
+  }
+
+  static void AppendLog(WebSession& session, int player, std::string text,
+                        std::string engine_text) {
+    session.log.push_back({player, std::move(text), std::move(engine_text),
+                           session.next_log_sequence++});
   }
 
   static void TrimLog(WebSession& session) {
@@ -1099,10 +1169,21 @@ class BangWebApp {
                   : action_text;
     const std::vector<CharacterSnapshot> before =
         CharacterSnapshots(session.state);
+    const auto& reveals = session.state.RevealEvents();
+    const int last_reveal = reveals.empty() ? 0 : reveals.back().sequence;
 
-    session.log.push_back({player, text, ActionToString(action_id)});
+    AppendLog(session, player, text, ActionToString(action_id));
     session.state.ApplyAction(action_id);
     session.history.push_back(action_id);
+
+    // Reveals the engine resolved during this action, in the order it did.
+    for (const auto& event : session.state.RevealEvents()) {
+      if (event.sequence <= last_reveal) continue;
+      AppendLog(session, RevealOwner(event), RevealText(event),
+                "reveal(" + RevealReasonName(event.reason) + "," +
+                    std::string(GetCard(GetCardInstance(event.card_instance).name).key) +
+                    "," + (event.triggered ? "triggered" : "missed") + ")");
+    }
 
     const std::vector<CharacterSnapshot> after =
         CharacterSnapshots(session.state);
@@ -1114,10 +1195,9 @@ class BangWebApp {
           });
       if (current != after.end() && current->life > 0) continue;
       const auto& character = GetCharacter(fallen.character_id);
-      session.log.push_back(
-          {fallen.player,
-           std::string(character.display_name) + " died.",
-           "death(" + std::string(character.key) + ")"});
+      AppendLog(session, fallen.player,
+                std::string(character.display_name) + " died.",
+                "death(" + std::string(character.key) + ")");
     }
   }
 
@@ -1182,7 +1262,9 @@ class BangWebApp {
     return ChooseHeuristicAction(session.state, session.bot_rng);
   }
 
-  void AdvanceAutomaticActions(WebSession& session) {
+  // `frames`, when given, receives the player-scoped state after each move.
+  void AdvanceAutomaticActions(WebSession& session,
+                               JsonValue::Array* frames = nullptr) {
     int steps = 0;
     while (!session.state.IsTerminal()) {
       const std::optional<int> forced_human_action =
@@ -1203,6 +1285,7 @@ class BangWebApp {
           session.state.CurrentPhase() == Phase::kChooseActive &&
           !session.state.SetupComplete();
       ApplyLoggedAction(session, player, action_id, hidden_setup_choice);
+      if (frames != nullptr) frames->push_back(Serialize(session));
     }
     TrimLog(session);
   }
@@ -1286,6 +1369,7 @@ class BangWebApp {
                              SideName(static_cast<Side>(entry.player))))},
           {"text", entry.text},
           {"engineText", entry.engine_text},
+          {"sequence", static_cast<double>(entry.sequence)},
       });
     }
 
@@ -1690,6 +1774,61 @@ JsonValue RunWebSmokeTest(const WebConfig& config) {
   if (!attributed_action) {
     throw std::runtime_error("web log action is missing character attribution");
   }
+
+  // The opponent's turn comes back as one player-view frame per move, and
+  // log sequence numbers keep counting so the browser can diff past the
+  // trimmed log. Play on, ending turns where possible, until a reply has one.
+  const auto max_sequence = [](const JsonValue::Object& state) {
+    double best = -1.0;
+    double previous = -1.0;
+    for (const JsonValue& value : JsonArray(state.at("log"), "sequenced log")) {
+      const auto* sequence = std::get_if<double>(
+          &JsonObject(value, "sequenced entry").at("sequence").storage());
+      if (sequence == nullptr || *sequence <= previous) {
+        throw std::runtime_error("web log sequences must strictly increase");
+      }
+      previous = *sequence;
+      best = std::max(best, *sequence);
+    }
+    return best;
+  };
+  JsonValue current = advanced;
+  bool saw_replay = false;
+  for (int step = 0; step < 200 && !saw_replay; ++step) {
+    const auto& state = JsonObject(current, "stepped web state");
+    if (const auto found = state.find("replay"); found != state.end()) {
+      const auto& frames = JsonArray(found->second, "replay frames");
+      if (frames.size() < 2) throw std::runtime_error("replay must hold several moves");
+      for (const JsonValue& frame : frames) {
+        const auto& view = JsonObject(frame, "replay frame");
+        if (view.find("players") == view.end() || view.find("replay") != view.end()) {
+          throw std::runtime_error("replay frame is not a plain player view");
+        }
+        max_sequence(view);
+      }
+      if (max_sequence(JsonObject(frames.back(), "last frame")) != max_sequence(state)) {
+        throw std::runtime_error("replay does not end where the returned state does");
+      }
+      saw_replay = true;
+      break;
+    }
+    const auto* terminal = std::get_if<bool>(&state.at("terminal").storage());
+    if (terminal != nullptr && *terminal) break;
+    const auto& legal = JsonArray(state.at("legalActions"), "stepped legal actions");
+    if (legal.empty()) break;
+    const auto end_turn = std::find_if(legal.begin(), legal.end(), [](const JsonValue& value) {
+      const auto* kind = std::get_if<std::string>(
+          &JsonObject(value, "stepped action").at("kind").storage());
+      return kind != nullptr && *kind == "end_turn";
+    });
+    const auto& chosen = JsonObject(end_turn != legal.end() ? *end_turn : legal.front(),
+                                    "chosen action");
+    current = app.ApplyHumanAction(
+        *session_id,
+        static_cast<int>(std::get<double>(chosen.at("id").storage())));
+  }
+  if (!saw_replay) throw std::runtime_error("the opponent's turn produced no replay");
+
   return JsonValue::Object{
       {"ok", true},
       {"sessionId", *session_id},

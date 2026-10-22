@@ -272,4 +272,28 @@ assert.equal(fx.playCaption({ verb: "play", isHuman: true }, "You"), "You play")
 assert.equal(fx.playCaption({ verb: "play", isHuman: false }, "Outlaw"), "Outlaw plays");
 assert.equal(fx.playCaption({ verb: "avoid", isHuman: false }, "Outlaw"), "Outlaw blocks with");
 
+/* ---------- new log entries ---------- */
+
+// Once the server's trimmed log is full, both states hold the same number of
+// entries; the sequence numbers still say exactly which ones are new.
+{
+  const entry = sequence => ({ sequence, player: 1, engineText: `play(colt,opponent_active)` });
+  const full = Array.from({ length: 120 }, (_, index) => entry(index));
+  const later = [...full.slice(3), entry(120), entry(121), entry(122)];
+  assert.deepEqual(
+    fx.newLogEntries({ log: full }, { log: later }).map(item => item.sequence),
+    [120, 121, 122]);
+  // A play in a full log still gets its ceremony.
+  const prev = { humanPlayer: 0, log: full, discard: [], players: [] };
+  const next = {
+    humanPlayer: 0, log: [...full.slice(1), entry(120)],
+    discard: [{ key: "colt", kind: "bang", instance: 7 }], players: [],
+  };
+  assert.equal(fx.playEvents(prev, next).length, 1);
+  // Servers without sequences fall back to comparing lengths.
+  assert.deepEqual(
+    fx.newLogEntries({ log: [{}, {}] }, { log: [{}, {}, { text: "new" }] }),
+    [{ text: "new" }]);
+}
+
 console.log("web card fx tests passed");
