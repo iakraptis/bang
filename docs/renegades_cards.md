@@ -141,6 +141,12 @@ Per card:
 - **Dutch Harry** (implementation): every card he draws after setup (turn
   draw, effects, Wagon, Union Pacific from either deck) is looked at before the
   next decision; the starting hand is dealt, not drawn.
+- **El Chindi** (user ruling): as the AC with cards in his owner's hand, he
+  ignores the opponent's Action-card hits (Derringer, Duel, Knife, Gatling,
+  Indians!, Ricochet's life loss, Return Fire's ⊛), being moved (Water, Switch)
+  and Strong Ale. Cards in play on him can still be taken or discarded.
+- **Kitty Leroy** (user ruling): own turn only; she decides when using the
+  Resource. A repeated hit picks a new target after the first hit resolves.
 - **Hick Addams** (implementation): draws for Ambush, Carbine, Peacemaker,
   Slap, Slim Poet and a replaced duplicate Equipment; not for cards taken
   (Stealing, Poker Alicia) or discarded to react.
@@ -195,7 +201,7 @@ Renegade characters are dealt in Reinforcements but have no abilities yet.
 | Characters: Big Steve, Charlie Basset, Hottie Delou, King Fishers, The Marshal, Poker Alicia | Done, with tests |
 | Characters: Jim Longhair, Mystic Maid | Done, with tests |
 | Characters: Dutch Harry, Hick Addams | Done, with tests |
-| Other characters (El Chindi, Kitty Leroy) | To do |
+| Characters: El Chindi, Kitty Leroy (all 12 characters done) | Done, with tests |
 | Renegades as a side (The Third Group) and format selection | Phase 4 |
 
 ## Rules decisions

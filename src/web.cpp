@@ -404,6 +404,20 @@ AbilityPrompt AbilityPromptFor(const GameState& state) {
       prompt.skip = "Skip the draw";
       prompt.skip_detail = "Let the swap pass without drawing";
       break;
+    case CharacterName::kKittyLeroy:
+      if (has_kind(ActionKind::kUseResource)) {
+        prompt.label = "Kitty Leroy: aim the repeat";
+        prompt.hint = "The Resource's effect happens a second time. Choose its target.";
+      } else {
+        prompt.label = "Kitty Leroy: repeat this Resource?";
+        prompt.hint =
+            "Once per turn, Kitty Leroy may discard 1 card from her hand to "
+            "repeat the effect of the Resource she is using.";
+        prompt.pick_detail = "Discard it to repeat the Resource's effect";
+        prompt.skip = "Use it once";
+        prompt.skip_detail = "Keep your hand";
+      }
+      break;
     case CharacterName::kJimLonghair:
       prompt.label = "Jim Longhair: swap the opponent too?";
       prompt.hint =

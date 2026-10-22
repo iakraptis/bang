@@ -277,6 +277,11 @@ class GameState {
   int extra_bang_allowance_ = 0;
   // Switch: the side that may still swap once the first swap has resolved.
   int switch_second_player_ = -1;
+  // Kitty Leroy: the Resource waiting for her choice, and the one whose
+  // effect repeats once its first resolution is over.
+  int kitty_resource_ = -1;
+  Target kitty_target_ = Target::kOwnActive;
+  int kitty_repeat_ = -1;
   // Dutch Harry: draws waiting for his look, resolved before the next
   // decision, with the interrupted decision saved meanwhile.
   struct DutchHarryDraw {
@@ -435,6 +440,16 @@ class GameState {
   bool CanUsePearlHat() const;
   void FinishJango(bool draw);
   void FinishJimLonghair(bool swap);
+  // El Chindi at `player`'s `position`, immune to `actor`'s Action cards.
+  bool ElChindiImmune(int player, int position, int actor) const;
+  // A Switch may swap this side (El Chindi can refuse it).
+  bool SwitchCanSwap(int player) const;
+  void ResolveResource(int card_instance, Target target, bool repeat);
+  void ResolveResourceEffect(int card_instance, Target target);
+  void FinishKittyLeroy(std::optional<int> hand_card);
+  std::vector<int> KittyLeroyRepeatActions() const;
+  void BeginKittyLeroyRepeat();
+  void FinishKittyLeroyRepeat(Target target);
   void ApplyLegalAction(const ActionKey& action);
   // Draw 1 card from `deck_owner`'s deck (or the common deck) into
   // `player`'s hand; Dutch Harry's draws wait for his look.

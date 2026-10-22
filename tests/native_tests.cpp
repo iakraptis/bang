@@ -1740,6 +1740,70 @@ void TestDutchHarryAndHickAddams() {
   }
 }
 
+void TestElChindiAndKittyLeroy() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed,
+                                CN::kMissed, CN::kMissed, CN::kMissed};
+  {
+    // El Chindi, with cards in hand, cannot be moved by the opponent's Switch.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = {1, 9};
+    config.character_rosters[1] = {id(CH::kElChindi), 16};
+    config.starting_decks[0] = DeckWithTop(
+        bang::Side::kLaw, {CN::kSwitch, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed}, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, fillers, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSwitch), bang::Target::kOwnActive));
+    Require(HasAction(state, bang::kChooseOwnSwapAction) &&
+                !HasAction(state, bang::kChooseOpponentSwapAction),
+            "El Chindi is immune to the opponent's Switch");
+  }
+  {
+    // Kitty Leroy: discard a hand card when using her Resource to repeat it;
+    // the repeated hit is aimed after the first one resolves.
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = {1, 9};
+    config.character_rosters[1] = {12, id(CH::kKittyLeroy)};
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, fillers, kMode);
+    config.starting_decks[1] = DeckWithTop(
+        bang::Side::kOutlaw, {CN::kDoubleBarrel, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+        kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    EndCurrentTurn(state);
+    const int barrel = HandCard(state, 1, CN::kDoubleBarrel);
+    state.ApplyAction(bang::PlayCardAction(barrel, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurn(state);
+    EndCurrentTurn(state);
+    const auto& law = state.Players()[0];
+    const int law_active = law.active_position;
+    const int life = law.positions[static_cast<std::size_t>(law_active)].life;
+    state.ApplyAction(bang::UseResourceAction(barrel, bang::Target::kOpponentActive));
+    Require(state.CurrentPhase() == bang::Phase::kChooseAbility &&
+                HasAction(state, bang::kSkipOptionalAction),
+            "Kitty Leroy may pay a hand card to repeat the Resource");
+    const int paid = state.Players()[1].hand.front();
+    state.ApplyAction(bang::DiscardCardAction(paid));
+    Require(state.CurrentPhase() == bang::Phase::kRespondToHit, "the first hit comes");
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(state.CurrentPhase() == bang::Phase::kChooseAbility &&
+                HasAction(state, bang::UseResourceAction(barrel, bang::Target::kOpponentActive)),
+            "then she aims the repeat");
+    state.ApplyAction(bang::UseResourceAction(barrel, bang::Target::kOpponentActive));
+    state.ApplyAction(bang::kTakeHitAction);
+    Require(state.Players()[0].positions[static_cast<std::size_t>(law_active)].life == life - 2 &&
+                state.CurrentPhase() == bang::Phase::kPlay,
+            "two hits from one Double Barrel");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5448,6 +5512,7 @@ int main() {
     TestTheMarshalAndPokerAlicia();
     TestJimLonghairAndMysticMaid();
     TestDutchHarryAndHickAddams();
+    TestElChindiAndKittyLeroy();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

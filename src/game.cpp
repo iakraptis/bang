@@ -260,8 +260,8 @@ std::vector<int> GameState::LegalActions() const {
       result.push_back(kAcceptOptionalAction);
       return result;
     }
-    if (CanSwapSide(turn_player_)) result.push_back(kChooseOwnSwapAction);
-    if (CanSwapSide(OtherPlayer(turn_player_))) result.push_back(kChooseOpponentSwapAction);
+    if (SwitchCanSwap(turn_player_)) result.push_back(kChooseOwnSwapAction);
+    if (SwitchCanSwap(OtherPlayer(turn_player_))) result.push_back(kChooseOpponentSwapAction);
     return result;
   }
   if (phase_ == Phase::kChooseUnionPacific) {
@@ -498,6 +498,16 @@ std::vector<int> GameState::LegalActions() const {
       for (const int instance : CattleKatieEquipment(decision_player_)) {
         result.push_back(SelectCardAction(instance));
       }
+    } else if (ability == CharacterName::kKittyLeroy) {
+      if (ability_stage_ == 0) {
+        result.push_back(kSkipOptionalAction);  // use it once
+        for (const int instance : players_[static_cast<std::size_t>(turn_player_)].hand) {
+          result.push_back(DiscardCardAction(instance));
+        }
+      } else {
+        const auto repeat = KittyLeroyRepeatActions();
+        result.insert(result.end(), repeat.begin(), repeat.end());
+      }
     } else if (ability == CharacterName::kPokerAlicia) {
       result.push_back(kSkipOptionalAction);  // draw as usual
       for (const auto& side : players_) {
@@ -678,7 +688,7 @@ std::vector<int> GameState::LegalActions() const {
           }
         }
       } else if (card.name == CardName::kSwitch) {
-        if (CanSwapSide(decision_player_) || CanSwapSide(OtherPlayer(decision_player_))) {
+        if (SwitchCanSwap(decision_player_) || SwitchCanSwap(OtherPlayer(decision_player_))) {
           result.push_back(PlayCardAction(instance, Target::kOwnActive));
         }
       } else if (card.name == CardName::kAmbush) {
@@ -803,6 +813,12 @@ std::vector<int> GameState::LegalActions() const {
       return false;
     }
     const CardName name = GetCardInstance(key.card_instance).name;
+    if (key.kind == ActionKind::kPlayCard && GetCard(name).kind == CardKind::kAction) {
+      // El Chindi is immune to the opponent's Action cards (Water moves him).
+      const auto [player, position] =
+          ResolveTarget(decision_player_, static_cast<Target>(key.target));
+      if (ElChindiImmune(player, position, decision_player_)) return true;
+    }
     if (name == CardName::kSharps ||
         (key.kind != ActionKind::kPlayAsColt && !GetCard(name).has_hit)) {
       return false;
@@ -823,6 +839,7 @@ void GameState::ApplyAction(int action_id) {
     throw std::invalid_argument("illegal action: " + description);
   }
   ApplyLegalAction(DecodeAction(action_id));
+  BeginKittyLeroyRepeat();
   BeginDutchHarryLooks();
 }
 
@@ -887,6 +904,9 @@ void GameState::ApplyLegalAction(const ActionKey& action) {
                pending_ability_ ==
                    static_cast<int>(CharacterName::kPokerAlicia)) {
       FinishPokerAlicia(std::nullopt);
+    } else if (phase_ == Phase::kChooseAbility &&
+               pending_ability_ == static_cast<int>(CharacterName::kKittyLeroy)) {
+      FinishKittyLeroy(std::nullopt);
     } else if (phase_ == Phase::kChooseRemington) {
       FinishRemingtonChoice(action.card_instance == 1);
     } else if (phase_ == Phase::kChooseCarbine && action.card_instance == 0) {
@@ -996,6 +1016,11 @@ void GameState::ApplyLegalAction(const ActionKey& action) {
     return;
   }
   if (action.kind == ActionKind::kDiscardCard) {
+    if (phase_ == Phase::kChooseAbility &&
+        pending_ability_ == static_cast<int>(CharacterName::kKittyLeroy)) {
+      FinishKittyLeroy(action.card_instance);
+      return;
+    }
     if (phase_ == Phase::kChooseSlap) {
       FinishSlapPick(action.card_instance);
       return;
@@ -1109,6 +1134,11 @@ void GameState::ApplyLegalAction(const ActionKey& action) {
     return;
   }
   if (action.kind == ActionKind::kUseResource) {
+    if (phase_ == Phase::kChooseAbility &&
+        pending_ability_ == static_cast<int>(CharacterName::kKittyLeroy)) {
+      FinishKittyLeroyRepeat(static_cast<Target>(action.target));
+      return;
+    }
     UseResource(action.card_instance, static_cast<Target>(action.target));
     return;
   }
@@ -1121,6 +1151,7 @@ void GameState::StartTurn() {
   bang_cards_played_ = 0;
   ability_used_this_turn_.fill(false);
   received_resource_this_turn_.fill(false);
+  kitty_repeat_ = -1;
   extra_bang_allowance_ = 0;
   phase_ = Phase::kPlay;
   start_turn_step_ = StartTurnStep::kDynamite;
@@ -1520,6 +1551,19 @@ void GameState::ResumeAfterMovement() {
   }
 }
 
+bool GameState::ElChindiImmune(int player, int position, int actor) const {
+  if (player == actor) return false;
+  const auto& state = players_[static_cast<std::size_t>(player)];
+  return position == state.active_position && !state.hand.empty() &&
+         TargetHasAbility(player, position, CharacterName::kElChindi);
+}
+
+bool GameState::SwitchCanSwap(int player) const {
+  return CanSwapSide(player) &&
+         !ElChindiImmune(player, players_[static_cast<std::size_t>(player)].active_position,
+                         turn_player_);
+}
+
 bool GameState::CanSwapSide(int player) const {
   const auto& state = players_[static_cast<std::size_t>(player)];
   return state.positions[0].life > 0 && state.positions[1].life > 0;
@@ -1528,14 +1572,14 @@ bool GameState::CanSwapSide(int player) const {
 void GameState::FinishSwitchChoice(bool opponent) {
   const int first = opponent ? OtherPlayer(turn_player_) : turn_player_;
   const int second = OtherPlayer(first);
-  if (!CanSwapSide(first)) throw std::logic_error("Switch side cannot swap");
-  switch_second_player_ = CanSwapSide(second) ? second : -1;
+  if (!SwitchCanSwap(first)) throw std::logic_error("Switch side cannot swap");
+  switch_second_player_ = SwitchCanSwap(second) ? second : -1;
   // A paused swap (Tom Thorn, Jango) comes back through ResumeAfterMovement.
   if (!SwapCharacters(first, false)) ContinueSwitch();
 }
 
 void GameState::ContinueSwitch() {
-  if (switch_second_player_ >= 0 && !IsTerminal() && CanSwapSide(switch_second_player_)) {
+  if (switch_second_player_ >= 0 && !IsTerminal() && SwitchCanSwap(switch_second_player_)) {
     decision_player_ = turn_player_;
     phase_ = Phase::kChooseSwitch;
     return;
@@ -1549,7 +1593,7 @@ void GameState::ContinueSwitch() {
 void GameState::FinishSwitchSecond(bool accept) {
   const int second = switch_second_player_;
   switch_second_player_ = -1;
-  if (accept && CanSwapSide(second) && SwapCharacters(second, false)) return;
+  if (accept && SwitchCanSwap(second) && SwapCharacters(second, false)) return;
   decision_player_ = turn_player_;
   phase_ = Phase::kPlay;
 }
@@ -1870,19 +1914,126 @@ void GameState::UseResource(int card_instance, Target target) {
     throw std::logic_error("resource is not usable");
   }
   RecordResourceUse(turn_player_, card_instance);
+  const auto kitty = static_cast<std::size_t>(CharacterName::kKittyLeroy);
+  if (IsCharacterAbilityActive(turn_player_, CharacterName::kKittyLeroy) &&
+      !ability_used_this_turn_[kitty] &&
+      !players_[static_cast<std::size_t>(turn_player_)].hand.empty()) {
+    // Kitty Leroy decides now whether a hand card buys a repeat.
+    pending_ability_ = static_cast<int>(CharacterName::kKittyLeroy);
+    ability_stage_ = 0;
+    kitty_resource_ = card_instance;
+    kitty_target_ = target;
+    decision_player_ = turn_player_;
+    phase_ = Phase::kChooseAbility;
+    return;
+  }
+  ResolveResource(card_instance, target, false);
+}
+
+void GameState::FinishKittyLeroy(std::optional<int> hand_card) {
+  if (phase_ != Phase::kChooseAbility || ability_stage_ != 0 ||
+      pending_ability_ != static_cast<int>(CharacterName::kKittyLeroy)) {
+    throw std::logic_error("there is no pending Kitty Leroy choice");
+  }
+  pending_ability_ = -1;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+  const int instance = kitty_resource_;
+  kitty_resource_ = -1;
+  if (hand_card) {
+    DiscardFromHand(turn_player_, *hand_card);
+    ability_used_this_turn_[static_cast<std::size_t>(CharacterName::kKittyLeroy)] = true;
+  }
+  ResolveResource(instance, kitty_target_, hand_card.has_value());
+}
+
+std::vector<int> GameState::KittyLeroyRepeatActions() const {
+  std::vector<int> result;
+  const CardName name = GetCardInstance(kitty_repeat_).name;
+  const auto aim = [&](Target target) {
+    const auto [player, position] = ResolveTarget(turn_player_, target);
+    const auto& character = players_[static_cast<std::size_t>(player)]
+                                .positions[static_cast<std::size_t>(position)];
+    if (character.life > 0 && !SpursShield(player, position)) {
+      result.push_back(UseResourceAction(kitty_repeat_, target));
+    }
+  };
+  if (name == CardName::kBuffaloRifle) {
+    aim(Target::kOpponentActive);
+    aim(Target::kOpponentRearguard);
+  } else if (name == CardName::kPardner || name == CardName::kDoubleBarrel ||
+             name == CardName::kHowitzer) {
+    aim(Target::kOpponentActive);
+    if (IsCharacterAbilityActive(turn_player_, CharacterName::kJackRansome) ||
+        HasActiveEquipment(turn_player_, CardName::kScope)) {
+      aim(Target::kOpponentRearguard);
+    }
+  } else if (name == CardName::kIndianChief || name == CardName::kSlap) {
+    result.push_back(UseResourceAction(kitty_repeat_, Target::kOwnActive));
+  }
+  return result;
+}
+
+void GameState::BeginKittyLeroyRepeat() {
+  if (kitty_repeat_ < 0) return;
+  if (IsTerminal()) {
+    kitty_repeat_ = -1;
+    return;
+  }
+  // Wait until the first resolution is over and play is back.
+  if (phase_ != Phase::kPlay || decision_player_ != turn_player_ || pending_hit_) return;
+  if (KittyLeroyRepeatActions().empty()) {
+    kitty_repeat_ = -1;
+    return;
+  }
+  pending_ability_ = static_cast<int>(CharacterName::kKittyLeroy);
+  ability_stage_ = 1;
+  phase_ = Phase::kChooseAbility;
+}
+
+void GameState::FinishKittyLeroyRepeat(Target target) {
+  if (phase_ != Phase::kChooseAbility || ability_stage_ != 1 ||
+      pending_ability_ != static_cast<int>(CharacterName::kKittyLeroy)) {
+    throw std::logic_error("there is no pending Kitty Leroy repeat");
+  }
+  const int instance = kitty_repeat_;
+  kitty_repeat_ = -1;
+  pending_ability_ = -1;
+  ability_stage_ = 0;
+  decision_player_ = turn_player_;
+  phase_ = Phase::kPlay;
+  ResolveResourceEffect(instance, target);
+}
+
+void GameState::ResolveResource(int card_instance, Target target, bool repeat) {
   const CardName name = GetCardInstance(card_instance).name;
   auto& state = players_[static_cast<std::size_t>(turn_player_)];
   if (name == CardName::kGoldPan) {
-    // The top discard is taken before the Gold Pan itself is discarded.
+    // The top discard is taken before the Gold Pan itself is discarded. A
+    // repeat takes the next one too, from under Kitty Leroy's discard.
+    std::optional<int> kitty_card;
+    if (repeat) {
+      kitty_card = discard_.back();
+      discard_.pop_back();
+    }
     if (discard_.empty()) throw std::logic_error("Gold Pan needs a discard pile");
-    const int top = discard_.back();
-    discard_.pop_back();
-    state.hand.push_back(top);
-    MarkHandCardPublic(turn_player_, top);
+    for (int taken = 0; taken < (repeat ? 2 : 1) && !discard_.empty(); ++taken) {
+      const int top = discard_.back();
+      discard_.pop_back();
+      state.hand.push_back(top);
+      MarkHandCardPublic(turn_player_, top);
+    }
+    if (kitty_card) discard_.push_back(*kitty_card);
     RemoveEquipment(turn_player_, state.active_position, card_instance);
     return;
   }
   RemoveEquipment(turn_player_, state.active_position, card_instance);
+  if (repeat) kitty_repeat_ = card_instance;
+  ResolveResourceEffect(card_instance, target);
+}
+
+void GameState::ResolveResourceEffect(int card_instance, Target target) {
+  const CardName name = GetCardInstance(card_instance).name;
   if (name == CardName::kBuffaloRifle) {
     // Drawn immediately, before the opponent reacts.
     DrawOne(turn_player_);
@@ -2327,7 +2478,8 @@ void GameState::ResolveActionEffect(CardName name, Target target) {
       const auto& character = players_[static_cast<std::size_t>(player)]
                                   .positions[static_cast<std::size_t>(position)];
       // Spurs keeps a Gatling off its character (Indians! still reaches it).
-      if (character.life > 0 && !(name == CardName::kGatling && SpursShield(player, position))) {
+      if (character.life > 0 && !(name == CardName::kGatling && SpursShield(player, position)) &&
+          !ElChindiImmune(player, position, turn_player_)) {
         hits.push_back({turn_player_, player, position, turn_player_, name, false,
                         response});
       }
@@ -2452,6 +2604,13 @@ void GameState::FinishDuelResponse(std::optional<int> card_instance) {
   const int resume = effect_actor_;
   effect_actor_ = -1;
   effect_target_position_ = -1;
+  if (ricochet_ && ElChindiImmune(loser, position, resume)) {
+    // El Chindi loses no life to the opponent's Ricochet.
+    ricochet_ = false;
+    decision_player_ = turn_player_;
+    phase_ = Phase::kPlay;
+    return;
+  }
   const CardName source = ricochet_ ? CardName::kRicochet : CardName::kColt;
   ricochet_ = false;
   PendingHit continuation{-1, loser, position, resume, source, false};
@@ -2719,9 +2878,16 @@ void GameState::RecordAvoid(bool return_fire, int counter_character) {
     return;
   }
 
-  const PendingHit original = *pending_hit_;
+  PendingHit original = *pending_hit_;
   pending_hit_.reset();
   ApplyAvoidedCardMoves(original);
+  // El Chindi is immune to the Return Fire's hit.
+  if (original.return_fire_pending &&
+      ElChindiImmune(original.attacker,
+                     players_[static_cast<std::size_t>(original.attacker)].active_position,
+                     original.target)) {
+    original.return_fire_pending = false;
+  }
   if (original.source == CardName::kDoubleBarrel && !original.follow_up) {
     const int other = 1 - original.target_position;
     if (players_[static_cast<std::size_t>(original.target)]
