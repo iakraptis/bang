@@ -361,6 +361,27 @@ approach an equilibrium rather than a fixed amount of randomness.
 
 The league opponent mix is unchanged; MMD only changes the learner's objective.
 
+## Input layouts and older policies
+
+The policy's inputs (observation, action features, and the critic-only
+privileged observation) are built from block tables in
+`include/bang/input_layout.hpp`. Block sizes depend only on a few counts:
+card names, characters, card copies, sides, phase capacity, card kinds, and
+action kinds. The engine's counts cover the base game plus the Renegades
+expansion; base games simply never set the expansion's inputs.
+
+Checkpoint and static-policy metadata record the layout a policy was trained
+on (`"layout"`, ABI v2). Older exports (ABI v1) imply the base layout. Loading
+a policy with a smaller layout widens its four raw-input layers: each old
+column moves to the same block and position in the current layout, and new
+inputs get zero weight. Such a policy therefore plays base games exactly as it
+did when trained. `tests/policy_parity_tests.py` replays recorded scores from
+the committed browser policy to prove it.
+
+A widened checkpoint can be evaluated, played, exported, and used as a league
+opponent, but not resumed: its optimizer state belongs to the old layout.
+Start a new run instead.
+
 ## Current limitations and next experiments
 
 - The actor is feed-forward. The observation preserves known public card

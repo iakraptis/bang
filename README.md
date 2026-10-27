@@ -71,8 +71,13 @@ owned by the state and seeded through `GameConfig`.
 ```
 
 Open <http://127.0.0.1:8765>. The server owns the session and plays the other
-side with the built-in heuristic. Pick your side, a 2–12 character roster, and
-an optional seed from the **New duel** dialog.
+side with the built-in heuristic. Pick the format, your side, a 2–12 character
+roster, and an optional seed from the **New duel** dialog. Besides the base game,
+the formats include the Renegades expansion: **Reinforcements** (Renegade cards
+and characters join both sides) and **The Third Group** (the Renegades as a side
+of their own, against the Law or the Outlaws). `--mode` sets the format of duels
+started without one (`base`, `reinforcements`, `renegades_vs_law`,
+`renegades_vs_outlaw`).
 
 To play the trained agent locally instead of the heuristic, build the static
 webapp (below) or point the server at a training run with `--require-trained`.

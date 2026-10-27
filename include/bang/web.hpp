@@ -5,6 +5,7 @@
 #include <string>
 
 #include "bang/json.hpp"
+#include "bang/static_data.hpp"
 
 namespace bang {
 
@@ -22,6 +23,8 @@ struct WebConfig {
   int torch_threads = 1;
   bool require_trained_policy = false;
   bool stochastic_policy = true;
+  // Which cards new duels deal: the base game or Renegades Reinforcements.
+  GameMode mode = GameMode::kBase;
 };
 
 JsonValue RunWebSmokeTest(const WebConfig& config = {});

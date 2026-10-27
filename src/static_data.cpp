@@ -103,6 +103,77 @@ constexpr std::array<CardData, kCardNameCount> kCards = {{
     {CN::kWinchester, "winchester", "Winchester",
      "Deal 1 hit. This card may target the opponent's rearguard.",
      CK::kBang, true, false, false, false},
+    // Renegades expansion (docs/renegades_cards.md). Flags: hit, avoid,
+    // reload, always active.
+    {CN::kAgility, "agility", "Agility",
+     "Avoid 1 hit. Draw 1 card.",
+     CK::kAction, false, true, false, false},
+    {CN::kAmbush, "ambush", "Ambush",
+     "Discard 1 card in play from your active character and/or 1 from any active character.",
+     CK::kAction, false, false, false, false},
+    {CN::kBuffaloRifle, "buffalo_rifle", "Buffalo Rifle",
+     "Deal 1 hit; it may target the opponent's rearguard. Draw 1 card.",
+     CK::kResource, true, false, false, false},
+    {CN::kDoubleBarrel, "double_barrel", "Double Barrel",
+     "Deal 1 hit. If it is avoided, the opponent's other character is targeted too.",
+     CK::kResource, true, false, false, false},
+    {CN::kFeint, "feint", "Feint",
+     "Avoid 1 hit. If it avoids a BANG! card, take that card.",
+     CK::kAction, false, true, false, false},
+    {CN::kGoldPan, "gold_pan", "Gold Pan",
+     "Draw the top card of the discard pile.",
+     CK::kResource, false, false, false, false},
+    {CN::kHowitzer, "howitzer", "Howitzer",
+     "Deal 1 hit. Unless avoided, the opponent's active and rearguard each lose 1 life.",
+     CK::kResource, true, false, false, false},
+    {CN::kIndianChief, "indian_chief", "Indian Chief",
+     "For each of their characters, the opponent discards a hit card or loses 1 life.",
+     CK::kResource, false, false, false, false},
+    {CN::kLightning, "lightning", "Lightning",
+     "Deal 1 hit. You may play 1 additional BANG! card this turn.",
+     CK::kBang, true, false, false, false},
+    {CN::kLuckyPenny, "lucky_penny", "Lucky Penny",
+     "Avoid 1 hit. Draw 1 card.",
+     CK::kResource, false, true, false, false},
+    {CN::kPardner, "pardner", "Pardner",
+     "Use as a hit or as an avoid.",
+     CK::kResource, true, true, false, false},
+    {CN::kRicochet, "ricochet", "Ricochet",
+     "Players alternately discard avoid cards, opponent first; the first who fails loses 1 life on their active.",
+     CK::kAction, false, false, false, false},
+    {CN::kSavage, "savage", "Savage",
+     "Deal 1 hit. Draw 1 card.",
+     CK::kBang, true, false, false, false},
+    {CN::kSharps, "sharps", "Sharps",
+     "Deal 1 hit. The target's ability and Equipment have no effect.",
+     CK::kBang, true, false, false, false},
+    {CN::kSidekick, "sidekick", "Sidekick",
+     "Whenever this character becomes active, the opponent's active is hit; any hand card avoids it.",
+     CK::kEquipment, false, false, true, false},
+    {CN::kSlap, "slap", "Slap",
+     "Discard 1 card in play from any active character and/or 1 card from any player's hand.",
+     CK::kResource, false, false, false, false},
+    {CN::kSpencer, "spencer", "Spencer",
+     "Deal 1 hit; a target with 4 or more life loses 2 life.",
+     CK::kBang, true, false, false, false},
+    {CN::kSpurs, "spurs", "Spurs",
+     "While your hand is empty, this character cannot be targeted by hits.",
+     CK::kEquipment, false, false, false, false},
+    {CN::kSwitch, "switch", "Switch",
+     "Swap up to two active characters with their rearguards, in the order you choose.",
+     CK::kAction, false, false, true, false},
+    {CN::kUnionPacific, "union_pacific", "Union Pacific",
+     "Draw 2 cards in total from your deck and/or the opponent's.",
+     CK::kAction, false, false, false, false},
+    {CN::kWalker, "walker", "Walker",
+     "Deal 1 hit. If it is avoided, take this card back into your hand.",
+     CK::kBang, true, false, false, false},
+    {CN::kWhiskey, "whiskey", "Whiskey",
+     "Reveal: on a Horseshoe your active regains 2 life, otherwise 1.",
+     CK::kAction, false, false, false, false},
+    {CN::kWhitney, "whitney", "Whitney",
+     "Deal 1 hit that can only be avoided with a hit card.",
+     CK::kBang, true, false, false, false},
 }};
 
 struct CardVariant {
@@ -154,6 +225,39 @@ constexpr std::array<int, kCardsPerSide> kOutlawDeckVariants = {
     7, 23, 17, 0, 3, 22, 10, 16, 8, 15, 5, 25, 19, 15, 5, 25, 2, 19, 12, 15,
     24, 24, 15, 4, 11, 15, 21, 21, 21, 21, 6, 20, 21, 13, 13, 13, 1, 14, 18, 9};
 
+// Renegades: every copy as printed (docs/renegades_cards.md).
+constexpr std::array<CardVariant, kRenegadeCardsPerSide> kRenegadeLawCards = {{
+    {CN::kAmbush, RS::kHorseshoe},      {CN::kAgility, RS::kSnake},
+    {CN::kFeint, RS::kSnake},           {CN::kMissed, RS::kSnake},
+    {CN::kMissed, RS::kSnake},          {CN::kMissed, RS::kDynamite},
+    {CN::kRicochet, RS::kHorseshoe},    {CN::kSwitch, RS::kBarrel},
+    {CN::kSwitch, RS::kBarrel},         {CN::kSpurs, RS::kBarrel},
+    {CN::kCarbine, RS::kHorseshoe},     {CN::kWalker, RS::kBarrel},
+    {CN::kWalker, RS::kBarrel},         {CN::kWhitney, RS::kDynamite},
+    {CN::kBuffaloRifle, RS::kHorseshoe}, {CN::kBuffaloRifle, RS::kHorseshoe},
+    {CN::kHowitzer, RS::kDynamite},     {CN::kGoldPan, RS::kSnake},
+    {CN::kPardner, RS::kHorseshoe},     {CN::kPardner, RS::kHorseshoe},
+}};
+
+constexpr std::array<CardVariant, kRenegadeCardsPerSide> kRenegadeOutlawCards = {{
+    {CN::kAmbush, RS::kSnake},          {CN::kAgility, RS::kSnake},
+    {CN::kFeint, RS::kSnake},           {CN::kKnife, RS::kHorseshoe},
+    {CN::kUnionPacific, RS::kHorseshoe}, {CN::kWhiskey, RS::kBarrel},
+    {CN::kSidekick, RS::kSnake},        {CN::kLightning, RS::kDynamite},
+    {CN::kLightning, RS::kDynamite},    {CN::kSavage, RS::kSnake},
+    {CN::kSharps, RS::kHorseshoe},      {CN::kSharps, RS::kHorseshoe},
+    {CN::kSpencer, RS::kHorseshoe},     {CN::kSpencer, RS::kHorseshoe},
+    {CN::kIndianChief, RS::kBarrel},    {CN::kDoubleBarrel, RS::kHorseshoe},
+    {CN::kDoubleBarrel, RS::kHorseshoe}, {CN::kSlap, RS::kBarrel},
+    {CN::kSlap, RS::kBarrel},           {CN::kLuckyPenny, RS::kBarrel},
+}};
+
+// Copies 0-39 Law, 40-79 Outlaw (base); 80-99 Renegade-Law, 100-119
+// Renegade-Outlaw.
+inline constexpr int kRenegadeLawFirstCard = kBaseCardInstanceCount;
+inline constexpr int kRenegadeOutlawFirstCard =
+    kRenegadeLawFirstCard + kRenegadeCardsPerSide;
+
 constexpr std::array<CardInstanceData, kCardInstanceCount> BuildCardInstances() {
   std::array<CardInstanceData, kCardInstanceCount> result{};
   for (int i = 0; i < kCardsPerSide; ++i) {
@@ -162,6 +266,14 @@ constexpr std::array<CardInstanceData, kCardInstanceCount> BuildCardInstances() 
     const auto outlaw = kOutlawVariants[static_cast<std::size_t>(kOutlawDeckVariants[i])];
     result[kCardsPerSide + i] = {
         kCardsPerSide + i, Side::kOutlaw, outlaw.name, outlaw.reveal};
+  }
+  for (int i = 0; i < kRenegadeCardsPerSide; ++i) {
+    const auto law = kRenegadeLawCards[static_cast<std::size_t>(i)];
+    result[kRenegadeLawFirstCard + i] = {
+        kRenegadeLawFirstCard + i, Side::kLaw, law.name, law.reveal, true};
+    const auto outlaw = kRenegadeOutlawCards[static_cast<std::size_t>(i)];
+    result[kRenegadeOutlawFirstCard + i] = {
+        kRenegadeOutlawFirstCard + i, Side::kOutlaw, outlaw.name, outlaw.reveal, true};
   }
   return result;
 }
@@ -241,6 +353,44 @@ constexpr std::array<CharacterData, kCharacterCount> kCharacters = {{
     {23, Side::kOutlaw, "west_harding", "West Harding",
      "You may play any number of BANG! cards during your turn.",
      4, false},
+    // Renegades expansion (docs/renegades_cards.md): Renegade-Law ...
+    {24, Side::kLaw, "charlie_basset", "Charlie Basset",
+     "Once per turn, after you use a Resource, draw 1 card.",
+     3, true, true},
+    {25, Side::kLaw, "hick_addams", "Hick Addams",
+     "When another player makes you discard a hand card or a card from him, draw 1 card.",
+     4, false, true},
+    {26, Side::kLaw, "hottie_delou", "Hottie Delou",
+     "Once per turn, you may use one of her Resources the turn it was put into play.",
+     4, false, true},
+    {27, Side::kLaw, "mystic_maid", "Mystic Maid",
+     "Discard one of her Equipment cards (not always active) to avoid or as a Colt, then draw 1 card.",
+     3, false, true},
+    {28, Side::kLaw, "poker_alicia", "Poker Alicia",
+     "Instead of drawing your 2 cards, you may take 1 Equipment from any active character.",
+     4, false, true},
+    {29, Side::kLaw, "the_marshal", "The Marshal",
+     "When he enters play, draw 3 cards in total from the decks of your choice.",
+     5, true, true},
+    // ... and Renegade-Outlaw.
+    {30, Side::kOutlaw, "big_steve", "Big Steve",
+     "At the end of your turn, you may hold up to 6 cards in your hand.",
+     5, true, true},
+    {31, Side::kOutlaw, "dutch_harry", "Dutch Harry",
+     "When you draw, you may look at the top card of the deck and keep or discard it.",
+     4, true, true},
+    {32, Side::kOutlaw, "el_chindi", "El Chindi",
+     "While you hold any cards, he is immune to Action cards played by other players.",
+     3, false, true},
+    {33, Side::kOutlaw, "jim_longhair", "Jim Longhair",
+     "Whenever your characters swap, you may swap the opponent's characters too.",
+     4, true, true},
+    {34, Side::kOutlaw, "king_fishers", "King Fishers",
+     "Whenever any character receives its first Resource of the turn, draw 1 card.",
+     4, false, true},
+    {35, Side::kOutlaw, "kitty_leroy", "Kitty Leroy",
+     "Once per turn, when you use one of her Resources, you may discard a hand card to repeat it.",
+     3, false, true},
 }};
 
 }  // namespace
@@ -274,12 +424,75 @@ const CardInstanceData& GetCardInstance(int id) {
   return kCardInstances[static_cast<std::size_t>(id)];
 }
 
-std::vector<int> StartingDeck(Side side) {
+Faction SeatFaction(Side seat, GameMode mode) {
+  switch (mode) {
+    case GameMode::kRenegadesVsLaw:
+      return seat == Side::kLaw ? Faction::kLaw : Faction::kRenegades;
+    case GameMode::kRenegadesVsOutlaw:
+      return seat == Side::kLaw ? Faction::kOutlaw : Faction::kRenegades;
+    case GameMode::kBase:
+    case GameMode::kReinforcements:
+      break;
+  }
+  return seat == Side::kLaw ? Faction::kLaw : Faction::kOutlaw;
+}
+
+std::string_view FactionName(Faction faction) {
+  switch (faction) {
+    case Faction::kLaw: return "law";
+    case Faction::kOutlaw: return "outlaw";
+    case Faction::kRenegades: return "renegades";
+  }
+  return "law";
+}
+
+int StartingHandSize(Side seat, GameMode mode) {
+  // The Law starts with 4 cards and the Outlaws with 5; the Renegades take
+  // whichever count their opponent does not.
+  const Faction faction = SeatFaction(seat, mode);
+  if (faction == Faction::kLaw) return 4;
+  if (faction == Faction::kOutlaw) return 5;
+  return SeatFaction(OtherSide(seat), mode) == Faction::kLaw ? 5 : 4;
+}
+
+std::string_view GameModeName(GameMode mode) {
+  switch (mode) {
+    case GameMode::kBase: return "base";
+    case GameMode::kReinforcements: return "reinforcements";
+    case GameMode::kRenegadesVsLaw: return "renegades_vs_law";
+    case GameMode::kRenegadesVsOutlaw: return "renegades_vs_outlaw";
+  }
+  return "base";
+}
+
+GameMode GameModeFromName(std::string_view name) {
+  for (const GameMode mode : {GameMode::kBase, GameMode::kReinforcements,
+                              GameMode::kRenegadesVsLaw, GameMode::kRenegadesVsOutlaw}) {
+    if (GameModeName(mode) == name) return mode;
+  }
+  throw std::invalid_argument(
+      "mode must be base, reinforcements, renegades_vs_law or renegades_vs_outlaw");
+}
+
+std::vector<int> StartingDeck(Side side, GameMode mode) {
   std::vector<int> result;
-  result.reserve(kCardsPerSide);
-  const int first = side == Side::kLaw ? 0 : kCardsPerSide;
+  result.reserve(kCardsPerSide + kRenegadeCardsPerSide);
+  const Faction faction = SeatFaction(side, mode);
+  if (faction == Faction::kRenegades) {
+    // The Third Group: all 40 Renegade cards, both backs.
+    for (int id = kRenegadeLawFirstCard; id < kCardInstanceCount; ++id) result.push_back(id);
+    return result;
+  }
+  const int first = faction == Faction::kLaw ? 0 : kCardsPerSide;
   for (int id = first; id < first + kCardsPerSide; ++id) {
     result.push_back(id);
+  }
+  if (mode == GameMode::kReinforcements) {
+    const int renegades =
+        faction == Faction::kLaw ? kRenegadeLawFirstCard : kRenegadeOutlawFirstCard;
+    for (int id = renegades; id < renegades + kRenegadeCardsPerSide; ++id) {
+      result.push_back(id);
+    }
   }
   return result;
 }
@@ -293,12 +506,24 @@ const CharacterData& GetCharacter(int id) {
   return kCharacters[static_cast<std::size_t>(id)];
 }
 
-std::vector<int> CharacterIds(Side side) {
+std::vector<int> CharacterIds(Side side, GameMode mode) {
   std::vector<int> result;
-  result.reserve(kCharactersPerSide);
-  const int first = side == Side::kLaw ? 0 : kCharactersPerSide;
+  result.reserve(kCharactersPerSide + kRenegadeCharactersPerSide);
+  const Faction faction = SeatFaction(side, mode);
+  if (faction == Faction::kRenegades) {
+    for (int id = kBaseCharacterCount; id < kCharacterCount; ++id) result.push_back(id);
+    return result;
+  }
+  const int first = faction == Faction::kLaw ? 0 : kCharactersPerSide;
   for (int id = first; id < first + kCharactersPerSide; ++id) {
     result.push_back(id);
+  }
+  if (mode == GameMode::kReinforcements) {
+    const int renegades = kBaseCharacterCount +
+                          (faction == Faction::kLaw ? 0 : kRenegadeCharactersPerSide);
+    for (int id = renegades; id < renegades + kRenegadeCharactersPerSide; ++id) {
+      result.push_back(id);
+    }
   }
   return result;
 }

@@ -16,6 +16,7 @@
   --law-light: #68a2b9;
   --outlaw: #7d2d25;
   --outlaw-light: #c66c52;
+  --renegades-light: #8fae5a;
   --gold: #c79b46;
   --gold-bright: #e8bf6a;
   --display: "Rockwell", "Roboto Slab", Georgia, serif;
@@ -211,6 +212,16 @@ button { color: inherit; }
 }
 .mini-back.outlaw, .card-back.outlaw {
   background: #4d241d url("cards/card_back_outlaw.png") center / cover no-repeat;
+}
+/* The Renegades' deck holds both backs: split corner to corner. */
+.mini-back.renegades, .card-back.renegades {
+  position: relative; overflow: hidden;
+  background: #173c51 url("cards/card_back_law.png") center / cover no-repeat;
+}
+.mini-back.renegades::after, .card-back.renegades::after {
+  content: ""; position: absolute; inset: 0;
+  background: #4d241d url("cards/card_back_outlaw.png") center / cover no-repeat;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
 }
 .deck-stack { position: relative; flex: 0 0 auto; }
 .deck-stack .mini-back { position: relative; z-index: 1; }
@@ -736,6 +747,7 @@ body.dragging * { cursor: grabbing !important; }
 .log-entry::before { content: ""; position: absolute; left: 2px; top: 10px; width: 5px; height: 5px; border-radius: 50%; background: #88745e; }
 .log-entry.law::before { background: var(--law-light); }
 .log-entry.outlaw::before { background: var(--outlaw-light); }
+.log-entry.renegades::before { background: var(--renegades-light); }
 .log-entry.system { color: var(--gold); font-style: italic; }
 
 /* ---------- toast / tooltip ---------- */
@@ -851,6 +863,8 @@ body.dragging * { cursor: grabbing !important; }
 }
 .modal h2 { margin: 0 0 16px; font: 28px var(--display); color: var(--red); text-align: center; }
 .side-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.form-row.format-row { grid-template-columns: auto 1fr; margin-bottom: 4px; }
+.format-note { margin: 0 0 12px; color: var(--ink-soft); font-size: 12px; }
 .side-option {
   display: grid; justify-items: center; gap: 3px; padding: 14px 8px 10px;
   border: 2px solid rgba(125,90,52,.4); border-radius: 8px; cursor: pointer; transition: .15s ease;
@@ -1087,6 +1101,7 @@ body.dragging * { cursor: grabbing !important; }
 }
 .lane-tags span.law { color: var(--law-light); }
 .lane-tags span.outlaw { color: var(--outlaw-light); }
+.lane-tags span.renegades { color: var(--renegades-light); }
 
 /* a moment: two cells straddling the trail line */
 .hist-moment { position: relative; flex: 0 0 auto; display: grid; grid-template-rows: 1fr 1fr; }
@@ -1100,6 +1115,7 @@ body.dragging * { cursor: grabbing !important; }
 }
 .hist-moment.law::after { background: var(--law-light); }
 .hist-moment.outlaw::after { background: var(--outlaw-light); }
+.hist-moment.renegades::after { background: var(--renegades-light); }
 
 /* the stack: responses fanned behind, the main card in front */
 .hist-stack {
@@ -1165,6 +1181,7 @@ body.dragging * { cursor: grabbing !important; }
 }
 .hist-moment.law .hist-caption { color: color-mix(in srgb, var(--law-light) 75%, #b3a186); }
 .hist-moment.outlaw .hist-caption { color: color-mix(in srgb, var(--outlaw-light) 75%, #b3a186); }
+.hist-moment.renegades .hist-caption { color: color-mix(in srgb, var(--renegades-light) 75%, #b3a186); }
 /* on the top rail the name sits above the card, mirroring the bottom rail */
 .hist-cell.top .hist-caption { order: -2; margin: 0 0 5px; }
 .hist-cell.top .hist-badges { order: -1; margin: 0 0 6px; }
@@ -1192,6 +1209,8 @@ body.dragging * { cursor: grabbing !important; }
 .hist-divider.turn.outlaw .rule { background: linear-gradient(180deg, transparent, rgba(198,108,82,.55), transparent); }
 .hist-divider.turn.law .label { color: var(--law-light); }
 .hist-divider.turn.outlaw .label { color: var(--outlaw-light); }
+.hist-divider.turn.renegades .rule { background: linear-gradient(180deg, transparent, rgba(143,174,90,.55), transparent); }
+.hist-divider.turn.renegades .label { color: var(--renegades-light); }
 .hist-mini {
   display: block; width: calc(var(--hw) * .42); border-radius: 4px;
   filter: grayscale(.85) brightness(.6) drop-shadow(0 2px 4px rgba(0,0,0,.4));

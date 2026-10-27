@@ -160,6 +160,27 @@ StaticPolicyLinear TakeLinear(
   };
 }
 
+// Moves a first layer trained on an older input layout onto the current one:
+// each old column lands where the column map says, new inputs get zero weight.
+// The column order is kept, so the layer computes the same sums as before.
+void WidenColumns(StaticPolicyLinear& layer, const std::vector<int>& columns,
+                  int input_size) {
+  if (static_cast<int>(columns.size()) != layer.input_size) {
+    throw std::logic_error("static policy column map does not match its layer");
+  }
+  std::vector<float> weights(
+      static_cast<std::size_t>(layer.output_size) * static_cast<std::size_t>(input_size), 0.0F);
+  for (int row = 0; row < layer.output_size; ++row) {
+    for (int column = 0; column < layer.input_size; ++column) {
+      weights[static_cast<std::size_t>(row) * static_cast<std::size_t>(input_size) +
+              static_cast<std::size_t>(columns[static_cast<std::size_t>(column)])] =
+          layer.weights[static_cast<std::size_t>(row * layer.input_size + column)];
+    }
+  }
+  layer.weights = std::move(weights);
+  layer.input_size = input_size;
+}
+
 std::vector<float> Linear(
     const StaticPolicyLinear& layer,
     std::span<const float> input) {
@@ -208,17 +229,27 @@ StaticPolicyNetwork LoadStaticPolicyJson(const std::string& text) {
   const auto& metadata =
       ObjectAt(Required(root, "metadata", "static policy"), "metadata");
   const std::string model_type = StringField(metadata, "modelType", "metadata");
+  // The input layout it was trained on: recorded since ABI v2, and the base
+  // layout for everything exported before.
+  const std::string observation_abi =
+      StringField(metadata, "observationAbi", "metadata");
+  const std::string action_feature_abi =
+      StringField(metadata, "actionFeatureAbi", "metadata");
+  LayoutDims layout = kBaseLayoutDims;
+  if (observation_abi == kObservationAbi && action_feature_abi == kActionFeatureAbi) {
+    layout = LayoutDimsFromJson(Required(metadata, "layout", "metadata"));
+  } else if (observation_abi != kObservationAbiV1 ||
+             action_feature_abi != kActionFeatureAbiV1) {
+    throw std::runtime_error("static policy has an unknown input ABI");
+  }
   if (!IsSupportedModelType(model_type) ||
       StringField(metadata, "ruleset", "metadata") !=
           "base_four_character" ||
-      StringField(metadata, "observationAbi", "metadata") !=
-          "bang_training_observation_v1" ||
-      StringField(metadata, "actionFeatureAbi", "metadata") !=
-          "bang_action_feature_v1" ||
+      !LayoutFits(layout, kLayoutDims) ||
       IntField(metadata, "observationSize", "metadata") !=
-          kTrainingObservationSize ||
+          TrainingObservationSizeFor(layout) ||
       IntField(metadata, "actionFeatureSize", "metadata") !=
-          kActionFeatureSize) {
+          ActionFeatureSizeFor(layout)) {
     throw std::runtime_error(
         "static policy is incompatible with the current training ABI");
   }
@@ -231,12 +262,12 @@ StaticPolicyNetwork LoadStaticPolicyJson(const std::string& text) {
       StringField(root, "sourceCheckpoint", "static policy");
   network.model_type = model_type;
   const PolicyArchitecture architecture = ArchitectureForModelType(model_type);
+  const int public_size = PublicObservationSizeFor(layout);
   network.public_encoder = TakeLinear(
-      tensors, "public_encoder.0",
-      kTrainingObservationOwnHandOffset, architecture.public_hidden);
+      tensors, "public_encoder.0", public_size, architecture.public_hidden);
   network.identity_encoder = TakeLinear(
       tensors, "identity_encoder.0",
-      kTrainingObservationSize - kTrainingObservationOwnHandOffset,
+      TrainingObservationSizeFor(layout) - public_size,
       architecture.identity_hidden);
   network.state_fusion = TakeLinear(
       tensors, "state_fusion.0",
@@ -255,12 +286,20 @@ StaticPolicyNetwork LoadStaticPolicyJson(const std::string& text) {
       architecture.state_hidden, architecture.action_hidden);
   network.action_encoder = TakeLinear(
       tensors, "action_encoder.0",
-      kActionFeatureSize, architecture.action_hidden);
+      ActionFeatureSizeFor(layout), architecture.action_hidden);
   network.actor =
       TakeLinear(tensors, "actor.0", architecture.action_hidden * 4, 1);
   if (!tensors.empty()) {
     throw std::runtime_error(
         "static policy contains unexpected actor tensors");
+  }
+  if (layout != kLayoutDims) {
+    const PolicyInputColumnMaps columns = PolicyInputColumns(layout, kLayoutDims);
+    WidenColumns(network.public_encoder, columns.public_encoder,
+                 kTrainingObservationOwnHandOffset);
+    WidenColumns(network.identity_encoder, columns.identity_encoder,
+                 kTrainingObservationSize - kTrainingObservationOwnHandOffset);
+    WidenColumns(network.action_encoder, columns.action_encoder, kActionFeatureSize);
   }
   return network;
 }

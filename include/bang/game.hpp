@@ -10,36 +10,42 @@
 
 namespace bang {
 
-inline constexpr int kObservationSize = 859;
+// Sizes and offsets of the policy inputs, from the block tables in
+// input_layout.hpp for the engine's current counts.
+inline constexpr int kObservationSize = ObservationSizeFor(kLayoutDims);
 inline constexpr int kTrainingObservationBaseSize = kObservationSize;
 inline constexpr int kTrainingObservationSideOffset =
-    kTrainingObservationBaseSize;
+    TrainingStart(kLayoutDims, TrainingBlock::kSide);
 inline constexpr int kTrainingObservationOwnHandOffset =
-    kTrainingObservationSideOffset + kSideCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kOwnHand);
 inline constexpr int kTrainingObservationDiscardOffset =
-    kTrainingObservationOwnHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kDiscard);
 inline constexpr int kTrainingObservationKnownOwnHandOffset =
-    kTrainingObservationDiscardOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kKnownOwnHand);
 inline constexpr int kTrainingObservationKnownOpponentHandOffset =
-    kTrainingObservationKnownOwnHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kKnownOpponentHand);
 inline constexpr int kTrainingObservationSeenOwnCharactersOffset =
-    kTrainingObservationKnownOpponentHandOffset + kCardInstanceCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kSeenOwnCharacters);
 inline constexpr int kTrainingObservationSeenOpponentCharactersOffset =
-    kTrainingObservationSeenOwnCharactersOffset + kCharacterCount;
+    TrainingStart(kLayoutDims, TrainingBlock::kSeenOpponentCharacters);
 inline constexpr int kTrainingObservationSize =
-    kTrainingObservationSeenOpponentCharactersOffset + kCharacterCount;
+    BlockTotal(TrainingBlockSizes(kLayoutDims));
 
-inline constexpr int kPrivilegedPlayerHandOffset = 0;
+// The privileged observation is one block per player (observer first), then
+// the common deck. Player offsets are relative to that player's block.
+inline constexpr int kPrivilegedPlayerHandOffset =
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverHand);
 inline constexpr int kPrivilegedPlayerDeckOffset =
-    kPrivilegedPlayerHandOffset + kCardInstanceCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverDeck);
 inline constexpr int kPrivilegedPlayerReserveOffset =
-    kPrivilegedPlayerDeckOffset + kCardInstanceCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kObserverReserve);
 inline constexpr int kPrivilegedPlayerSize =
-    kPrivilegedPlayerReserveOffset + kCharacterCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kOpponentHand);
 inline constexpr int kPrivilegedCommonDeckOffset =
-    kPrivilegedPlayerSize * kSideCount;
+    PrivilegedStart(kLayoutDims, PrivilegedBlock::kCommonDeck);
 inline constexpr int kPrivilegedObservationSize =
-    kPrivilegedCommonDeckOffset + kCardInstanceCount;
+    BlockTotal(PrivilegedBlockSizes(kLayoutDims));
+static_assert(kPrivilegedCommonDeckOffset == kPrivilegedPlayerSize * kSideCount);
 
 enum class Phase : std::uint8_t {
   kChooseActive,
@@ -58,6 +64,12 @@ enum class Phase : std::uint8_t {
   kChooseStealing,
   kChooseAbility,
   kTerminal,
+  // Renegades (appended so earlier phases keep their input slots)
+  kChooseSwitch,
+  kChooseUnionPacific,
+  kChooseAmbush,
+  kChooseSlap,
+  kChooseDutchHarry,
 };
 
 class FastRng {
@@ -96,6 +108,7 @@ struct PlayerState {
 
 struct GameConfig {
   std::uint64_t seed = 1;
+  GameMode mode = GameMode::kBase;
   int characters_per_side = 4;
   bool shuffle_decks = true;
   bool shuffle_characters = true;
@@ -107,6 +120,11 @@ class GameState {
  public:
   explicit GameState(GameConfig config = {});
 
+  // Which cards and characters this game deals.
+  GameMode Mode() const { return config_.mode; }
+  // The Duel phase is resolving a Ricochet (avoid cards instead of hit cards).
+  bool RicochetActive() const { return ricochet_; }
+
   int CurrentPlayer() const;
   int TurnPlayer() const;
   Phase CurrentPhase() const;
@@ -117,6 +135,8 @@ class GameState {
   const std::vector<int>& DiscardPile() const;
   const std::vector<int>& CommonDeck() const;
   const std::vector<int>& ChoiceCards() const;
+  // Cards held aside while Dutch Harry looks at his draws.
+  std::vector<int> CardsSetAside() const;
   const std::vector<int>& RevealedCards() const;
 
   enum class RevealReason : std::uint8_t {
@@ -124,6 +144,7 @@ class GameState {
     kDynamite,
     kRattlesnake,
     kSidCurry,
+    kWhiskey,
   };
   // One entry per resolved reveal (card flipped off a deck for Dynamite,
   // Rattlesnake, Barrel, …). Sequence numbers grow monotonically so a UI can
@@ -180,7 +201,10 @@ class GameState {
     kDamageReaction,
     kElimination,
   };
-  enum class MovementTrigger : std::uint8_t { kTomThorn, kClock, kJango };
+  enum class MovementTrigger : std::uint8_t {
+    kTomThorn, kClock, kJango, kSidekick, kJimLonghair};
+  // Where a run of deck draws (Union Pacific, The Marshal) resumes.
+  enum class DeckDrawResume : std::uint8_t { kPlay, kStartTurn, kReplacement };
 
   struct PendingHit {
     int attacker = -1;
@@ -197,6 +221,14 @@ class GameState {
     bool sid_attempted = false;
     ResumeKind resume_kind = ResumeKind::kPlay;
     int source_character = -1;
+    // The card copy that dealt the hit (Walker returns, Feint takes it).
+    int source_instance = -1;
+    // A Feint helped avoid this hit.
+    bool feint = false;
+    // The hit was not avoided (Howitzer then also hits the rearguard).
+    bool landed = false;
+    // A second hit a card already dealt (Double Barrel, Howitzer).
+    bool follow_up = false;
   };
 
   struct PendingReveal {
@@ -239,6 +271,42 @@ class GameState {
   };
 
   GameConfig config_;
+  // The turn each card copy last entered play, for Resources' one-turn wait.
+  std::array<int, kCardInstanceCount> entered_play_turn_{};
+  // Additional BANG! cards allowed this turn (Lightning).
+  int extra_bang_allowance_ = 0;
+  // Switch: the side that may still swap once the first swap has resolved.
+  int switch_second_player_ = -1;
+  // Kitty Leroy: the Resource waiting for her choice, and the one whose
+  // effect repeats once its first resolution is over.
+  int kitty_resource_ = -1;
+  Target kitty_target_ = Target::kOwnActive;
+  int kitty_repeat_ = -1;
+  // Dutch Harry: draws waiting for his look, resolved before the next
+  // decision, with the interrupted decision saved meanwhile.
+  struct DutchHarryDraw {
+    int deck_owner = -1;
+    bool to_wagon = false;
+  };
+  std::vector<DutchHarryDraw> dutch_draws_;
+  int dutch_player_ = -1;
+  bool dutch_wagon_ = false;
+  std::vector<int> dutch_wagon_cards_;
+  Phase dutch_saved_phase_ = Phase::kPlay;
+  int dutch_saved_decision_ = -1;
+  std::vector<int> dutch_saved_choice_;
+  bool dutch_saved_choice_public_ = false;
+  int deck_draw_player_ = -1;
+  int deck_draws_remaining_ = 0;
+  DeckDrawResume deck_draw_resume_ = DeckDrawResume::kPlay;
+  // Ambush: 0 picks from your own AC, 1 from any AC.
+  int ambush_stage_ = 0;
+  bool ricochet_ = false;
+  int slap_stage_ = 0;
+  // Characters that received a Resource this turn (King Fishers).
+  std::array<bool, kCharacterCount> received_resource_this_turn_{};
+  // Wild Bill owners whose cards Slap removed; each reacts once Slap ends.
+  std::vector<int> slap_wild_bill_owners_;
   std::array<PlayerState, kSideCount> players_{};
   std::vector<int> discard_;
   std::array<std::vector<int>, kSideCount> public_hand_cards_{};
@@ -320,6 +388,42 @@ class GameState {
   std::optional<std::pair<int, int>> FindEquipment(int player, CardName name) const;
   std::pair<int, int> ResolveTarget(int actor, Target target) const;
   bool IsSupportedEquipment(CardName name) const;
+  // Resources (Renegades): implemented, on `player`'s active character, and
+  // not put into play this turn.
+  bool IsSupportedResource(CardName name) const;
+  bool CanUseResource(int player, int card_instance) const;
+  // Walker goes back to its owner and Feint takes the BANG! card it avoided.
+  void ApplyAvoidedCardMoves(const PendingHit& hit);
+  bool CanSwapSide(int player) const;
+  // Spurs: an active character whose owner holds no cards cannot be the
+  // target of hits (Sharps ignores it).
+  bool SpursShield(int player, int position) const;
+  // Spurs stops hits, but not Indians!-style "discard or lose life" effects.
+  bool BlockedBySpurs(const PendingHit& hit) const;
+  // Hit Resources on `player`'s AC can be thrown away to answer Duel or
+  // Indians!, even on the turn they entered play.
+  std::vector<int> HitResourcesOnActive(int player) const;
+  void BeginRicochet();
+  // Slap: 0 picks a card in play on any AC, 1 a hand card of any player.
+  void FinishSlapPick(std::optional<int> card_instance);
+  void FinishSlapHandBack(Side origin);
+  void FinishSlap();
+  // A Resource on `player`'s side was used for its effect (Hottie Delou's
+  // same-turn use, Charlie Basset's draw).
+  void RecordResourceUse(int player, int card_instance);
+  void FinishSwitchChoice(bool opponent);
+  void ContinueSwitch();
+  void FinishSwitchSecond(bool accept);
+  // Draw `count` cards for `player`, choosing a deck for each (Union
+  // Pacific, The Marshal), then resume where the draws interrupted.
+  void BeginDeckDraws(int player, int count, DeckDrawResume resume);
+  void FinishDeckDraw(bool opponent);
+  // The rest of an elimination once its replacement has entered play.
+  void FinishReplacement();
+  bool PokerAliciaCanTake() const;
+  void FinishPokerAlicia(std::optional<int> card_instance);
+  void FinishAmbushPick(std::optional<int> card_instance);
+  void UseResource(int card_instance, Target target);
   bool IsSupportedBang(CardName name) const;
   bool IsSupportedAction(CardName name) const;
   void PlaceEquipment(int actor, int card_instance, Target target);
@@ -335,6 +439,30 @@ class GameState {
   std::vector<int> PearlHatActionsFor(int source_instance) const;
   bool CanUsePearlHat() const;
   void FinishJango(bool draw);
+  void FinishJimLonghair(bool swap);
+  // El Chindi at `player`'s `position`, immune to `actor`'s Action cards.
+  bool ElChindiImmune(int player, int position, int actor) const;
+  // A Switch may swap this side (El Chindi can refuse it).
+  bool SwitchCanSwap(int player) const;
+  void ResolveResource(int card_instance, Target target, bool repeat);
+  void ResolveResourceEffect(int card_instance, Target target);
+  void FinishKittyLeroy(std::optional<int> hand_card);
+  std::vector<int> KittyLeroyRepeatActions() const;
+  void BeginKittyLeroyRepeat();
+  void FinishKittyLeroyRepeat(Target target);
+  void ApplyLegalAction(const ActionKey& action);
+  // Draw 1 card from `deck_owner`'s deck (or the common deck) into
+  // `player`'s hand; Dutch Harry's draws wait for his look.
+  void DrawFromDeck(int player, int deck_owner);
+  void BeginDutchHarryLooks();
+  void NextDutchHarryLook();
+  void FinishDutchHarry(bool keep);
+  void ContinueWagon();
+  // Hick Addams draws when the opponent makes him discard.
+  void HickAddamsDraw(int owner, int actor, std::optional<int> equipment_position);
+  // Mystic Maid's Equipment while she is the active character.
+  std::vector<int> MysticMaidEquipment(int player) const;
+  void FinishMysticMaidAvoid(int card_instance);
   void CompleteActivatedAbility(CharacterName character);
   void ResolveAction(int card_instance, Target target);
   void ResolveActionEffect(CardName name, Target target);

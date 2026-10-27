@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 
+#include "bang/input_layout.hpp"
 #include "bang/static_data.hpp"
 
 namespace bang {
@@ -24,6 +25,8 @@ enum class ActionKind : std::uint8_t {
   kSelectCard,
   kPlayAsColt,
   kUseAbility,
+  // Discard a Resource from your active character for its effect (Renegades).
+  kUseResource,
 };
 
 enum class Target : std::uint8_t {
@@ -40,25 +43,35 @@ struct ActionKey {
   int target = -1;
 };
 
-inline constexpr int kActionKindCount = 15;
-inline constexpr int kActionFeatureKindOffset = 0;
-inline constexpr int kActionFeatureCardNameOffset =
-    kActionFeatureKindOffset + kActionKindCount;
-inline constexpr int kActionFeatureRevealOffset =
-    kActionFeatureCardNameOffset + kCardNameCount;
-inline constexpr int kActionFeatureOriginOffset =
-    kActionFeatureRevealOffset + 4;
-inline constexpr int kActionFeatureCardKindOffset =
-    kActionFeatureOriginOffset + kSideCount;
-inline constexpr int kActionFeatureCardPropertyOffset =
-    kActionFeatureCardKindOffset + 3;
-inline constexpr int kActionFeatureTargetOffset =
-    kActionFeatureCardPropertyOffset + 4;
-inline constexpr int kActionFeatureCharacterOffset =
-    kActionFeatureTargetOffset + 4;
-inline constexpr int kActionFeatureOptionOffset =
-    kActionFeatureCharacterOffset + kCharacterCount;
-inline constexpr int kActionFeatureSize = kActionFeatureOptionOffset + 4;
+inline constexpr int kActionKindCount = 16;
+inline constexpr int kCardKindCount = 4;
+inline constexpr int kPhaseCapacity = 32;
+// Barrel, Dynamite, Rattlesnake, Whiskey (Sid Curry has a slot of its own).
+inline constexpr int kRevealReasonInputs = 4;
+// Tom Thorn, Clock, Jango, Sidekick, Jim Longhair.
+inline constexpr int kMovementTriggerInputs = 5;
+static_assert(static_cast<int>(ActionKind::kUseResource) + 1 == kActionKindCount);
+static_assert(static_cast<int>(CardKind::kResource) + 1 == kCardKindCount);
+
+// The counts every policy input is laid out from (see input_layout.hpp).
+inline constexpr LayoutDims kLayoutDims{
+    kCardNameCount, kCharacterCount, kCardInstanceCount, kSideCount,
+    kPhaseCapacity, kCardKindCount, kActionKindCount, kRevealReasonInputs,
+    kMovementTriggerInputs};
+
+constexpr int ActionFeatureOffset(ActionFeatureBlock block) {
+  return ActionFeatureStart(kLayoutDims, block);
+}
+inline constexpr int kActionFeatureKindOffset = ActionFeatureOffset(ActionFeatureBlock::kKind);
+inline constexpr int kActionFeatureCardNameOffset = ActionFeatureOffset(ActionFeatureBlock::kCardName);
+inline constexpr int kActionFeatureRevealOffset = ActionFeatureOffset(ActionFeatureBlock::kReveal);
+inline constexpr int kActionFeatureOriginOffset = ActionFeatureOffset(ActionFeatureBlock::kOrigin);
+inline constexpr int kActionFeatureCardKindOffset = ActionFeatureOffset(ActionFeatureBlock::kCardKind);
+inline constexpr int kActionFeatureCardPropertyOffset = ActionFeatureOffset(ActionFeatureBlock::kCardProperty);
+inline constexpr int kActionFeatureTargetOffset = ActionFeatureOffset(ActionFeatureBlock::kTarget);
+inline constexpr int kActionFeatureCharacterOffset = ActionFeatureOffset(ActionFeatureBlock::kCharacter);
+inline constexpr int kActionFeatureOptionOffset = ActionFeatureOffset(ActionFeatureBlock::kOption);
+inline constexpr int kActionFeatureSize = BlockTotal(ActionFeatureBlockSizes(kLayoutDims));
 
 struct ActionFeature {
   std::array<float, kActionFeatureSize> values{};
@@ -87,12 +100,15 @@ inline constexpr int kChooseOutlawBackAction = kChooseLawBackAction + 1;
 inline constexpr int kPlayAsColtOffset = kChooseOutlawBackAction + 1;
 inline constexpr int kUseAbilityOffset =
     kPlayAsColtOffset + kCardInstanceCount * kPlayTargetCount;
-inline constexpr int kActionCount = kUseAbilityOffset + kCharacterCount;
+inline constexpr int kUseResourceOffset = kUseAbilityOffset + kCharacterCount;
+inline constexpr int kActionCount =
+    kUseResourceOffset + kCardInstanceCount * kPlayTargetCount;
 
 int PlayCardAction(int card_instance, Target target = Target::kOpponentActive);
 int ReloadCardAction(int card_instance);
 int DiscardCardAction(int card_instance);
 int AvoidHitAction(int card_instance);
+int UseResourceAction(int card_instance, Target target = Target::kOpponentActive);
 int SelectCardAction(int card_instance);
 int PlayAsColtAction(int card_instance,
                      Target target = Target::kOpponentActive);

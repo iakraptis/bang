@@ -25,6 +25,7 @@ add_library(bang_core
   src/action_space.cpp
   src/game.cpp
   src/heuristic.cpp
+  src/input_layout.cpp
   src/json.cpp
   src/static_data.cpp
   src/static_policy.cpp
@@ -117,6 +118,14 @@ if(BANG_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/about_data_tests.py"
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
+    add_test(
+      NAME policy_parity_tests
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/policy_parity_tests.py"
+        "$<TARGET_FILE:bang_duel>"
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
   endif()
   if(BANG_ENABLE_TORCH)
     if(NOT Python3_Interpreter_FOUND)
@@ -133,7 +142,7 @@ if(BANG_BUILD_TESTS)
     if(WIN32)
       # Windows has no rpath; the Torch DLLs (~4 GB with CUDA) are found on
       # PATH rather than copied next to every build.
-      set_tests_properties(bang_tests training_cli_tests PROPERTIES
+      set_tests_properties(bang_tests training_cli_tests policy_parity_tests PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${TORCH_INSTALL_PREFIX}/lib")
       # Telemetry is UTF-8; Windows Python otherwise decodes pipes as cp1252.
       set_property(TEST training_cli_tests APPEND PROPERTY

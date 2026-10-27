@@ -336,7 +336,8 @@
     const spotlight = action.kind === "end_turn" && endTurnSpotlight && !countingDown ? "spotlight" : "";
     // While an ability is waiting on a yes/no, a bare ✓/✗ does not say what
     // either option does — spell the two choices out.
-    const named = action.kind === "optional" && game.phase === "choose_ability";
+    const named = action.kind === "optional" &&
+      ["choose_ability", "choose_dutch_harry", "choose_switch", "duel_response"].includes(game.phase);
     if (action.kind === "choose_back") {
       const side = sideClass(action.origin || "law");
       return `<button class="dock-btn deck-pick" data-action="${action.id}" ${busy ? "disabled" : ""}
@@ -389,6 +390,9 @@
   // What picking this card would do, when the pending decision is an ability
   // step (pay a cost, keep one of two draws, …) rather than a normal play.
   function pickNote(instance) {
+    // Mystic Maid turns her Equipment into a Colt or an avoid in any phase.
+    const maid = actionsForInstance(instance).find(action => action.label.startsWith("Mystic Maid"));
+    if (maid) return `${maid.label}${maid.detail ? ` — ${maid.detail}` : ""}.`;
     if (game.phase !== "choose_ability") return "";
     return actionsForInstance(instance).find(action => action.detail)?.detail || "";
   }
@@ -482,7 +486,9 @@
     const positions = [...player.positions].sort((a, b) => a.role === "active" ? -1 : b.role === "active" ? 1 : 0);
     const backs = [];
     const shown = Math.min(player.handCount, 8);
-    for (let i = 0; i < shown; i += 1) backs.push(`<span class="card-back ${sideClass(player.side)}"></span>`);
+    for (let i = 0; i < shown; i += 1) {
+      backs.push(`<span class="card-back ${sideClass(player.handBacks?.[i] || player.side)}"></span>`);
+    }
     const known = player.knownHand?.length
       ? `<div class="known-row" ${tipAttr("Known cards", "Cards in this hand you have seen")}>${player.knownHand.map(card =>
           `<span class="known-card" ${tipAttr(card.name, card.rulesText)}><img src="${cardImage(card.key)}" alt="" draggable="false"></span>`).join("")}</div>`
@@ -826,7 +832,7 @@
     return {
       won, trail,
       headline: won ? "LAST ONE STANDING" : "OUTGUNNED",
-      side: `${titleCase(game.players[game.humanPlayer]?.side)} · ${game.charactersPerSide} characters a side`,
+      side: `${titleCase(game.players[game.humanPlayer]?.side)} · ${FORMATS[formatOf(game.mode)].label} · ${game.charactersPerSide} characters a side`,
       opponent: game.ai?.trained
         ? `vs ${game.ai.name} · iteration ${game.ai.iteration}`
         : `vs ${game.ai?.name || "the house heuristic"}`,
@@ -2794,7 +2800,7 @@
      A click or Space/Enter/Escape skips to the end. */
 
   const REPLAY_PAUSE = { card: 650, move: 420, quiet: 140 };
-  const CEREMONY_VERB = /^(?:play|play_as_colt|avoid)\(/;
+  const CEREMONY_VERB = /^(?:play|play_as_colt|avoid|use_resource)\(/;
 
   async function playReplay(frames) {
     replaying = true;
@@ -2890,14 +2896,37 @@
      away, behind "Custom duel" — but the default path from cold start to a
      dealt hand is now a single button. */
 
-  const DEFAULT_SETUP = { humanPlayer: 0, charactersPerSide: 4 };
+  const DEFAULT_SETUP = { humanPlayer: 0, charactersPerSide: 4, mode: "base" };
+
+  // The formats a duel can be dealt in. Seat 0 always acts first; each seat
+  // lists [style class, name, note] for the side picker.
+  const FORMATS = {
+    base: {
+      label: "Classic", note: "The base game: Law against Outlaws.",
+      seats: [["law", "Law", "acts first"], ["outlaw", "Outlaws", "bigger hand"]],
+    },
+    reinforcements: {
+      label: "Reinforcements", note: "Renegade cards and characters join both sides.",
+      seats: [["law", "Law", "acts first"], ["outlaw", "Outlaws", "bigger hand"]],
+    },
+    renegades_vs_law: {
+      label: "Renegades vs Law", note: "The Third Group: the Renegades take on the Law.",
+      seats: [["law", "Law", "acts first"], ["renegades", "Renegades", "bigger hand"]],
+    },
+    renegades_vs_outlaw: {
+      label: "Renegades vs Outlaws", note: "The Third Group: the Renegades take on the Outlaws.",
+      seats: [["outlaw", "Outlaws", "acts first"], ["renegades", "Renegades", "smaller hand"]],
+    },
+  };
+  const formatOf = mode => (Object.hasOwn(FORMATS, mode) ? mode : "base");
 
   // What the last duel was set up with, so "Ride again" means what it says.
   function lastSetup() {
     try {
       const stored = JSON.parse(localStorage.getItem("bangDuelSetup") || "null");
       if (stored && Number.isInteger(stored.humanPlayer) && Number.isInteger(stored.charactersPerSide)) {
-        return { humanPlayer: stored.humanPlayer, charactersPerSide: stored.charactersPerSide };
+        return { humanPlayer: stored.humanPlayer, charactersPerSide: stored.charactersPerSide,
+          mode: formatOf(stored.mode) };
       }
     } catch { /* a corrupt entry just falls back to the standard duel */ }
     return { ...DEFAULT_SETUP };
@@ -2908,7 +2937,16 @@
     // what the seed box is for, not what "again" means.
     localStorage.setItem("bangDuelSetup", JSON.stringify({
       humanPlayer: values.humanPlayer, charactersPerSide: values.charactersPerSide,
+      mode: formatOf(values.mode),
     }));
+  }
+
+  function sidePickMarkup(mode, currentSide) {
+    return FORMATS[formatOf(mode)].seats.map(([style, name, note], seat) =>
+      `<label class="side-option ${style} ${currentSide === seat ? "picked" : ""}">
+        <input type="radio" name="humanPlayer" value="${seat}" ${currentSide === seat ? "checked" : ""}>
+        <span class="mini-back ${style}"></span><strong>${name}</strong><small>${note}</small>
+      </label>`).join("");
   }
 
   function showSplash() {
@@ -2928,22 +2966,22 @@
   }
 
   function showNewGameModal() {
-    const setup = game ? { humanPlayer: game.humanPlayer, charactersPerSide: game.charactersPerSide } : lastSetup();
+    const setup = game
+      ? { humanPlayer: game.humanPlayer, charactersPerSide: game.charactersPerSide, mode: formatOf(game.mode) }
+      : lastSetup();
     const currentSide = setup.humanPlayer;
     const currentCharacters = setup.charactersPerSide;
+    const currentMode = formatOf(setup.mode);
     modalRoot.innerHTML = `<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="new-game-title">
       <form class="modal" id="new-game-form">
         <h2 id="new-game-title">New duel</h2>
-        <div class="side-pick">
-          <label class="side-option law ${currentSide === 0 ? "picked" : ""}">
-            <input type="radio" name="humanPlayer" value="0" ${currentSide === 0 ? "checked" : ""}>
-            <span class="mini-back law"></span><strong>Law</strong><small>acts first</small>
-          </label>
-          <label class="side-option outlaw ${currentSide === 1 ? "picked" : ""}">
-            <input type="radio" name="humanPlayer" value="1" ${currentSide === 1 ? "checked" : ""}>
-            <span class="mini-back outlaw"></span><strong>Outlaws</strong><small>bigger hand</small>
-          </label>
+        <div class="form-row format-row">
+          <label for="format">Format</label>
+          <select id="format" name="mode">${Object.entries(FORMATS).map(([value, format]) =>
+            `<option value="${value}" ${value === currentMode ? "selected" : ""}>${format.label}</option>`).join("")}</select>
         </div>
+        <p class="format-note">${FORMATS[currentMode].note}</p>
+        <div class="side-pick">${sidePickMarkup(currentMode, currentSide)}</div>
         <div class="form-row">
           <label for="roster">Roster</label>
           <select id="roster" name="charactersPerSide">${[2, 3, 4, 5, 6, 8, 10, 12].map(value =>
@@ -2957,6 +2995,14 @@
   }
 
   document.addEventListener("change", event => {
+    if (event.target.matches?.("#format")) {
+      // A new format renames the two seats; keep the chosen seat.
+      const form = event.target.form;
+      const seat = Number(new FormData(form).get("humanPlayer")) || 0;
+      form.querySelector(".side-pick").innerHTML = sidePickMarkup(event.target.value, seat);
+      form.querySelector(".format-note").textContent = FORMATS[formatOf(event.target.value)].note;
+      return;
+    }
     if (!event.target.matches?.('.side-option input')) return;
     modalRoot.querySelectorAll(".side-option").forEach(el =>
       el.classList.toggle("picked", el.querySelector("input").checked));
@@ -2969,6 +3015,7 @@
     const values = {
       humanPlayer: Number(form.get("humanPlayer")),
       charactersPerSide: Number(form.get("charactersPerSide")),
+      mode: formatOf(form.get("mode")),
     };
     const seed = Number(form.get("seed"));
     if (seed > 0) values.seed = seed;

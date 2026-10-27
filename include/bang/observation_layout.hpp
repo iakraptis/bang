@@ -1,119 +1,129 @@
 #pragma once
 
 #include "bang/game.hpp"
+#include "bang/input_layout.hpp"
 
+// Offsets into GameState::ObservationTensor, derived from the block table in
+// input_layout.hpp for the engine's current counts (kLayoutDims).
 namespace bang::obs_layout {
 
-inline constexpr int kPhaseOffset = 0;
-inline constexpr int kPhaseCapacity = 16;
-inline constexpr int kDecisionPlayerOffset = 16;
-inline constexpr int kTurnPlayerOffset = 17;
-inline constexpr int kTurnNumberOffset = 18;
-inline constexpr int kDiscardCountOffset = 19;
-inline constexpr int kCommonDeckCountOffset = 20;
-inline constexpr int kCommonDeckCreatedOffset = 21;
-inline constexpr int kSwappedOffset = 22;
-inline constexpr int kBangLimitUsedOffset = 23;
-inline constexpr int kPendingHitOffset = 24;
-inline constexpr int kPendingTargetObserverOffset = 25;
-inline constexpr int kBarrelAttemptedOffset = 26;
-inline constexpr int kPendingTargetPositionOffset = 27;
-inline constexpr int kOwnActiveChosenOffset = 29;
-inline constexpr int kSetupRevealedOffset = 30;
-inline constexpr int kOptionalEffectPlayerOffset = 31;
+constexpr int Start(ObsBlock block) { return ObsStart(kLayoutDims, block); }
+// Offsets inside one player's block, relative to its start.
+constexpr int InPlayer(ObsBlock block) {
+  return Start(block) - Start(ObsBlock::kPlayerActiveCharacter);
+}
 
-inline constexpr int kPlayerBlocksOffset = 32;
+inline constexpr int kPhaseOffset = Start(ObsBlock::kPhase);
+inline constexpr int kPhaseCapacity = kLayoutDims.phases;
+inline constexpr int kDecisionPlayerOffset = Start(ObsBlock::kDecisionPlayer);
+inline constexpr int kTurnPlayerOffset = Start(ObsBlock::kTurnPlayer);
+inline constexpr int kTurnNumberOffset = Start(ObsBlock::kTurnNumber);
+inline constexpr int kDiscardCountOffset = Start(ObsBlock::kDiscardCount);
+inline constexpr int kCommonDeckCountOffset = Start(ObsBlock::kCommonDeckCount);
+inline constexpr int kCommonDeckCreatedOffset = Start(ObsBlock::kCommonDeckCreated);
+inline constexpr int kSwappedOffset = Start(ObsBlock::kSwapped);
+inline constexpr int kBangLimitUsedOffset = Start(ObsBlock::kBangLimitUsed);
+inline constexpr int kPendingHitOffset = Start(ObsBlock::kPendingHit);
+inline constexpr int kPendingTargetObserverOffset = Start(ObsBlock::kPendingTargetObserver);
+inline constexpr int kBarrelAttemptedOffset = Start(ObsBlock::kBarrelAttempted);
+inline constexpr int kPendingTargetPositionOffset = Start(ObsBlock::kPendingTargetPosition);
+inline constexpr int kOwnActiveChosenOffset = Start(ObsBlock::kOwnActiveChosen);
+inline constexpr int kSetupRevealedOffset = Start(ObsBlock::kSetupRevealed);
+inline constexpr int kOptionalEffectPlayerOffset = Start(ObsBlock::kOptionalEffectPlayer);
+
+inline constexpr int kPlayerBlocksOffset = Start(ObsBlock::kPlayerActiveCharacter);
 inline constexpr int kPlayerBlockCount = 2;
-inline constexpr int kPlayerBlockSize = 126;
-inline constexpr int kActiveCharacterOffset = 0;
-inline constexpr int kRearguardCharacterOffset = 24;
-inline constexpr int kActiveLifeOffset = 48;
-inline constexpr int kActiveMaxLifeOffset = 49;
-inline constexpr int kRearguardLifeOffset = 50;
-inline constexpr int kRearguardMaxLifeOffset = 51;
-inline constexpr int kReserveCountOffset = 52;
-inline constexpr int kHandCountOffset = 53;
-inline constexpr int kPersonalDeckCountOffset = 54;
-inline constexpr int kPersonalDeckExhaustedOffset = 55;
-inline constexpr int kActiveEquipmentOffset = 56;
-inline constexpr int kRearguardEquipmentOffset = 87;
-inline constexpr int kActiveEquipmentRevealOffset = 118;
-inline constexpr int kRearguardEquipmentRevealOffset = 122;
+inline constexpr int kPlayerBlockSize =
+    Start(ObsBlock::kOpponentActiveCharacter) - Start(ObsBlock::kPlayerActiveCharacter);
+inline constexpr int kActiveCharacterOffset = InPlayer(ObsBlock::kPlayerActiveCharacter);
+inline constexpr int kRearguardCharacterOffset = InPlayer(ObsBlock::kPlayerRearguardCharacter);
+inline constexpr int kActiveLifeOffset = InPlayer(ObsBlock::kPlayerActiveLife);
+inline constexpr int kActiveMaxLifeOffset = InPlayer(ObsBlock::kPlayerActiveMaxLife);
+inline constexpr int kRearguardLifeOffset = InPlayer(ObsBlock::kPlayerRearguardLife);
+inline constexpr int kRearguardMaxLifeOffset = InPlayer(ObsBlock::kPlayerRearguardMaxLife);
+inline constexpr int kReserveCountOffset = InPlayer(ObsBlock::kPlayerReserveCount);
+inline constexpr int kHandCountOffset = InPlayer(ObsBlock::kPlayerHandCount);
+inline constexpr int kPersonalDeckCountOffset = InPlayer(ObsBlock::kPlayerPersonalDeckCount);
+inline constexpr int kPersonalDeckExhaustedOffset = InPlayer(ObsBlock::kPlayerPersonalDeckExhausted);
+inline constexpr int kActiveEquipmentOffset = InPlayer(ObsBlock::kPlayerActiveEquipment);
+inline constexpr int kRearguardEquipmentOffset = InPlayer(ObsBlock::kPlayerRearguardEquipment);
+inline constexpr int kActiveEquipmentRevealOffset = InPlayer(ObsBlock::kPlayerActiveEquipmentReveal);
+inline constexpr int kRearguardEquipmentRevealOffset = InPlayer(ObsBlock::kPlayerRearguardEquipmentReveal);
 
-inline constexpr int kPrivateHandOffset = 284;
-inline constexpr int kPrivateHandRevealOffset = 315;
-inline constexpr int kDiscardCardsOffset = 319;
-inline constexpr int kDiscardRevealOffset = 350;
-inline constexpr int kFirstRevealedCardOffset = 354;
-inline constexpr int kSecondRevealedCardOffset = 389;
-inline constexpr int kRevealedCardSlotSize = 35;
-inline constexpr int kPendingHitSourceOffset = 424;
-inline constexpr int kPendingAttackerObserverOffset = 455;
-inline constexpr int kRevealReasonOffset = 456;
-inline constexpr int kRevealReasonCount = 3;
-inline constexpr int kStartTurnPendingOffset = 459;
-inline constexpr int kQueuedHitSourceOffset = 460;
-inline constexpr int kQueuedHitTargetObserverOffset = 491;
-inline constexpr int kQueuedHitAttackerObserverOffset = 492;
-inline constexpr int kPendingResponseKindOffset = 493;
+inline constexpr int kPrivateHandOffset = Start(ObsBlock::kPrivateHand);
+inline constexpr int kPrivateHandRevealOffset = Start(ObsBlock::kPrivateHandReveal);
+inline constexpr int kDiscardCardsOffset = Start(ObsBlock::kDiscardCards);
+inline constexpr int kDiscardRevealOffset = Start(ObsBlock::kDiscardReveal);
+// A revealed-card slot is a card-name block followed by its reveal symbols.
+inline constexpr int kFirstRevealedCardOffset = Start(ObsBlock::kFirstRevealedNames);
+inline constexpr int kSecondRevealedCardOffset = Start(ObsBlock::kSecondRevealedNames);
+inline constexpr int kRevealedCardSlotSize = kLayoutDims.card_names + kRevealSymbolCount;
+inline constexpr int kPendingHitSourceOffset = Start(ObsBlock::kPendingHitSource);
+inline constexpr int kPendingAttackerObserverOffset = Start(ObsBlock::kPendingAttackerObserver);
+inline constexpr int kRevealReasonOffset = Start(ObsBlock::kRevealReason);
+inline constexpr int kRevealReasonCount = kLayoutDims.reveal_reasons;
+inline constexpr int kStartTurnPendingOffset = Start(ObsBlock::kStartTurnPending);
+inline constexpr int kQueuedHitSourceOffset = Start(ObsBlock::kQueuedHitSource);
+inline constexpr int kQueuedHitTargetObserverOffset = Start(ObsBlock::kQueuedHitTargetObserver);
+inline constexpr int kQueuedHitAttackerObserverOffset = Start(ObsBlock::kQueuedHitAttackerObserver);
+inline constexpr int kPendingResponseKindOffset = Start(ObsBlock::kPendingResponseKind);
 inline constexpr int kPendingResponseKindCount = 3;
-inline constexpr int kHitSequenceActiveOffset = 496;
-inline constexpr int kDeferredEliminationOffset = 497;
-inline constexpr int kRemainingSequenceHitsOffset = 498;
-inline constexpr int kDeferredHitCountOffset = 499;
-inline constexpr int kChoiceCardNamesOffset = 500;
-inline constexpr int kChoiceCardRevealsOffset = 531;
-inline constexpr int kChoiceCardCountOffset = 535;
-inline constexpr int kChoiceCardsPublicOffset = 536;
-inline constexpr int kEffectActorObserverOffset = 537;
-inline constexpr int kOwnLawBackCountOffset = 538;
-inline constexpr int kOwnOutlawBackCountOffset = 539;
-inline constexpr int kOpponentLawBackCountOffset = 540;
-inline constexpr int kOpponentOutlawBackCountOffset = 541;
-inline constexpr int kAbilityUsedOffset = 542;
-inline constexpr int kPendingAbilityOffset = 566;
-inline constexpr int kPendingAbilityStageOffset = 590;
-inline constexpr int kPendingAvoidsRequiredOffset = 591;
-inline constexpr int kPendingAvoidsPlayedOffset = 592;
-inline constexpr int kPendingReturnFireOffset = 593;
-inline constexpr int kPendingSourceCharacterOffset = 594;
-inline constexpr int kPendingResumeKindOffset = 618;
-inline constexpr int kResumeKindCount = 7;
-inline constexpr int kMovementActiveOffset = 625;
-inline constexpr int kContinuationHitCountOffset = 626;
-inline constexpr int kMovementMoverObserverOffset = 627;
-inline constexpr int kMovementTriggersOffset = 628;
-inline constexpr int kMovementResumeKindOffset = 631;
-inline constexpr int kDamageReactionResumeOffset = 634;
-inline constexpr int kDamageReactionResumePlayerOffset = 641;
-inline constexpr int kPublicHandCardsOffset = 642;
-inline constexpr int kPublicHandBlockSize = 35;
-inline constexpr int kPendingCounterCharacterOffset = 712;
-inline constexpr int kPendingSidAttemptedOffset = 736;
-inline constexpr int kSidRevealOffset = 737;
-inline constexpr int kPendingReplicatedCardOffset = 738;
-inline constexpr int kPendingEliminationOffset = 769;
-inline constexpr int kEliminationOwnerObserverOffset = 770;
-inline constexpr int kEliminationPositionOffset = 771;
-inline constexpr int kEliminationBullPicksOffset = 773;
-inline constexpr int kEliminationResumeKindOffset = 774;
-inline constexpr int kEliminationResumePlayerOffset = 781;
-inline constexpr int kPendingDamageOffset = 782;
-inline constexpr int kDamageOwnerObserverOffset = 783;
-inline constexpr int kDamagePositionOffset = 784;
-inline constexpr int kDamageRemainingOffset = 786;
-inline constexpr int kDamageSourceObserverOffset = 787;
-inline constexpr int kDamageResumeKindOffset = 788;
-inline constexpr int kDamageReactionDepthOffset = 795;
-inline constexpr int kEliminationDepthOffset = 796;
-inline constexpr int kDamageReactionChoosingOriginOffset = 797;
-inline constexpr int kPrivateReserveOffset = 798;
-inline constexpr int kTopDiscardOffset = 822;
+inline constexpr int kHitSequenceActiveOffset = Start(ObsBlock::kHitSequenceActive);
+inline constexpr int kDeferredEliminationOffset = Start(ObsBlock::kDeferredElimination);
+inline constexpr int kRemainingSequenceHitsOffset = Start(ObsBlock::kRemainingSequenceHits);
+inline constexpr int kDeferredHitCountOffset = Start(ObsBlock::kDeferredHitCount);
+inline constexpr int kChoiceCardNamesOffset = Start(ObsBlock::kChoiceCardNames);
+inline constexpr int kChoiceCardRevealsOffset = Start(ObsBlock::kChoiceCardReveals);
+inline constexpr int kChoiceCardCountOffset = Start(ObsBlock::kChoiceCardCount);
+inline constexpr int kChoiceCardsPublicOffset = Start(ObsBlock::kChoiceCardsPublic);
+inline constexpr int kEffectActorObserverOffset = Start(ObsBlock::kEffectActorObserver);
+inline constexpr int kOwnLawBackCountOffset = Start(ObsBlock::kOwnLawBackCount);
+inline constexpr int kOwnOutlawBackCountOffset = Start(ObsBlock::kOwnOutlawBackCount);
+inline constexpr int kOpponentLawBackCountOffset = Start(ObsBlock::kOpponentLawBackCount);
+inline constexpr int kOpponentOutlawBackCountOffset = Start(ObsBlock::kOpponentOutlawBackCount);
+inline constexpr int kAbilityUsedOffset = Start(ObsBlock::kAbilityUsed);
+inline constexpr int kPendingAbilityOffset = Start(ObsBlock::kPendingAbility);
+inline constexpr int kPendingAbilityStageOffset = Start(ObsBlock::kPendingAbilityStage);
+inline constexpr int kPendingAvoidsRequiredOffset = Start(ObsBlock::kPendingAvoidsRequired);
+inline constexpr int kPendingAvoidsPlayedOffset = Start(ObsBlock::kPendingAvoidsPlayed);
+inline constexpr int kPendingReturnFireOffset = Start(ObsBlock::kPendingReturnFire);
+inline constexpr int kPendingSourceCharacterOffset = Start(ObsBlock::kPendingSourceCharacter);
+inline constexpr int kPendingResumeKindOffset = Start(ObsBlock::kPendingResumeKind);
+inline constexpr int kResumeKindCount = kResumeKindCapacity;
+inline constexpr int kMovementActiveOffset = Start(ObsBlock::kMovementActive);
+inline constexpr int kContinuationHitCountOffset = Start(ObsBlock::kContinuationHitCount);
+inline constexpr int kMovementMoverObserverOffset = Start(ObsBlock::kMovementMoverObserver);
+inline constexpr int kMovementTriggersOffset = Start(ObsBlock::kMovementTriggers);
+inline constexpr int kMovementResumeKindOffset = Start(ObsBlock::kMovementResumeKind);
+inline constexpr int kDamageReactionResumeOffset = Start(ObsBlock::kDamageReactionResume);
+inline constexpr int kDamageReactionResumePlayerOffset = Start(ObsBlock::kDamageReactionResumePlayer);
+// A public-hand block is a card-name block followed by its reveal symbols.
+inline constexpr int kPublicHandCardsOffset = Start(ObsBlock::kPublicHandObserverNames);
+inline constexpr int kPublicHandBlockSize = kLayoutDims.card_names + kRevealSymbolCount;
+inline constexpr int kPendingCounterCharacterOffset = Start(ObsBlock::kPendingCounterCharacter);
+inline constexpr int kPendingSidAttemptedOffset = Start(ObsBlock::kPendingSidAttempted);
+inline constexpr int kSidRevealOffset = Start(ObsBlock::kSidReveal);
+inline constexpr int kPendingReplicatedCardOffset = Start(ObsBlock::kPendingReplicatedCard);
+inline constexpr int kPendingEliminationOffset = Start(ObsBlock::kPendingElimination);
+inline constexpr int kEliminationOwnerObserverOffset = Start(ObsBlock::kEliminationOwnerObserver);
+inline constexpr int kEliminationPositionOffset = Start(ObsBlock::kEliminationPosition);
+inline constexpr int kEliminationBullPicksOffset = Start(ObsBlock::kEliminationBullPicks);
+inline constexpr int kEliminationResumeKindOffset = Start(ObsBlock::kEliminationResumeKind);
+inline constexpr int kEliminationResumePlayerOffset = Start(ObsBlock::kEliminationResumePlayer);
+inline constexpr int kPendingDamageOffset = Start(ObsBlock::kPendingDamage);
+inline constexpr int kDamageOwnerObserverOffset = Start(ObsBlock::kDamageOwnerObserver);
+inline constexpr int kDamagePositionOffset = Start(ObsBlock::kDamagePosition);
+inline constexpr int kDamageRemainingOffset = Start(ObsBlock::kDamageRemaining);
+inline constexpr int kDamageSourceObserverOffset = Start(ObsBlock::kDamageSourceObserver);
+inline constexpr int kDamageResumeKindOffset = Start(ObsBlock::kDamageResumeKind);
+inline constexpr int kDamageReactionDepthOffset = Start(ObsBlock::kDamageReactionDepth);
+inline constexpr int kEliminationDepthOffset = Start(ObsBlock::kEliminationDepth);
+inline constexpr int kDamageReactionChoosingOriginOffset = Start(ObsBlock::kDamageReactionChoosingOrigin);
+inline constexpr int kPrivateReserveOffset = Start(ObsBlock::kPrivateReserve);
+inline constexpr int kTopDiscardOffset = Start(ObsBlock::kTopDiscardNames);
 inline constexpr int kTopDiscardNameOffset = kTopDiscardOffset;
-inline constexpr int kTopDiscardRevealOffset =
-    kTopDiscardNameOffset + kCardNameCount;
-inline constexpr int kTopDiscardOriginOffset =
-    kTopDiscardRevealOffset + 4;
+inline constexpr int kTopDiscardRevealOffset = Start(ObsBlock::kTopDiscardReveal);
+inline constexpr int kTopDiscardOriginOffset = Start(ObsBlock::kTopDiscardOrigin);
 
 static_assert(static_cast<int>(Phase::kTerminal) < kPhaseCapacity);
 static_assert(kPlayerBlocksOffset + kPlayerBlockCount * kPlayerBlockSize ==

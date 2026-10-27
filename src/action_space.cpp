@@ -38,6 +38,16 @@ int PlayAsColtAction(int card_instance, Target target) {
   }
   return kPlayAsColtOffset + card_instance * kPlayTargetCount + target_index;
 }
+int UseResourceAction(int card_instance, Target target) {
+  if (card_instance < 0 || card_instance >= kCardInstanceCount) {
+    throw std::out_of_range("invalid card instance in resource action");
+  }
+  const int target_index = static_cast<int>(target);
+  if (target_index < 0 || target_index >= kPlayTargetCount) {
+    throw std::out_of_range("invalid target in resource action");
+  }
+  return kUseResourceOffset + card_instance * kPlayTargetCount + target_index;
+}
 int UseAbilityAction(CharacterName character) {
   const int index = static_cast<int>(character);
   if (index < 0 || index >= kCharacterCount) {
@@ -83,6 +93,11 @@ ActionKey DecodeAction(int action_id) {
   if (action_id == kChooseOutlawBackAction) {
     return {action_id, ActionKind::kChooseCardBack, 1, -1};
   }
+  if (action_id >= kUseResourceOffset) {
+    const int encoded = action_id - kUseResourceOffset;
+    return {action_id, ActionKind::kUseResource, encoded / kPlayTargetCount,
+            encoded % kPlayTargetCount};
+  }
   if (action_id >= kUseAbilityOffset) {
     return {action_id, ActionKind::kUseAbility, action_id - kUseAbilityOffset, -1};
   }
@@ -120,7 +135,8 @@ ActionFeature EncodeAction(int action_id) {
       action.kind == ActionKind::kDiscardCard ||
       action.kind == ActionKind::kAvoidHit ||
       action.kind == ActionKind::kSelectCard ||
-      action.kind == ActionKind::kPlayAsColt;
+      action.kind == ActionKind::kPlayAsColt ||
+      action.kind == ActionKind::kUseResource;
   if (has_card) {
     const auto& instance = GetCardInstance(action.card_instance);
     const auto& card = GetCard(instance.name);
@@ -190,6 +206,10 @@ std::string ActionToString(int action_id) {
     case ActionKind::kUseAbility:
       return "use_ability(" +
              std::string(GetCharacter(action.card_instance).key) + ")";
+    case ActionKind::kUseResource:
+      return "use_resource(" +
+             std::string(GetCard(GetCardInstance(action.card_instance).name).key) +
+             "," + TargetName(static_cast<Target>(action.target)) + ")";
   }
   throw std::logic_error("unknown action kind");
 }

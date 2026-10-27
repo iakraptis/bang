@@ -296,4 +296,20 @@ assert.equal(fx.playCaption({ verb: "avoid", isHuman: false }, "Outlaw"), "Outla
     [{ text: "new" }]);
 }
 
+// A Resource used from play gets a ceremony aimed at its target, like a play.
+{
+  const prev = { humanPlayer: 0, log: [{ sequence: 1 }], discard: [], players: [] };
+  const next = {
+    humanPlayer: 0,
+    log: [{ sequence: 1 }, { sequence: 2, player: 1, engineText: "use_resource(buffalo_rifle,opponent_rearguard)" }],
+    discard: [{ key: "buffalo_rifle", kind: "resource", instance: 94 }],
+    players: [],
+  };
+  const [event] = fx.playEvents(prev, next);
+  assert.equal(event.verb, "use_resource");
+  assert.equal(event.zone, "own_rearguard");
+  assert.equal(event.instance, 94);
+  assert.equal(fx.playCaption(event, "Outlaw"), "Outlaw uses");
+}
+
 console.log("web card fx tests passed");

@@ -12,13 +12,15 @@ import torch
 
 
 FORMAT = "bang_static_policy_v1"
-EXPECTED_METADATA = {
-    "ruleset": "base_four_character",
-    "observationAbi": "bang_training_observation_v1",
-    "actionFeatureAbi": "bang_action_feature_v1",
-    "observationSize": 1229,
-    "actionFeatureSize": 91,
+RULESET = "base_four_character"
+# v1 checkpoints predate recorded layouts and always use the base one; v2
+# checkpoints record theirs under "layout", and the C++ loader widens any
+# layout smaller than the current one when it reads the export.
+ABIS = {
+    ("bang_training_observation_v1", "bang_action_feature_v1"),
+    ("bang_training_observation_v2", "bang_action_feature_v2"),
 }
+V1_SIZES = {"observationSize": 1229, "actionFeatureSize": 91}
 # Residual-block counts per model type, mirroring PolicyArchitecture in
 # include/bang/policy_architecture.hpp. Layer widths are read from the tensors
 # themselves, so only the block count has to be known here.
@@ -42,11 +44,16 @@ def load_metadata(checkpoint: Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"missing checkpoint metadata: {path}")
     metadata = json.loads(path.read_text())
-    mismatches = [
-        key
-        for key, expected in EXPECTED_METADATA.items()
-        if metadata.get(key) != expected
-    ]
+    mismatches = []
+    if metadata.get("ruleset") != RULESET:
+        mismatches.append("ruleset")
+    abi = (metadata.get("observationAbi"), metadata.get("actionFeatureAbi"))
+    if abi not in ABIS:
+        mismatches.append("observationAbi/actionFeatureAbi")
+    elif abi[0].endswith("_v1"):
+        mismatches += [key for key, size in V1_SIZES.items() if metadata.get(key) != size]
+    elif not isinstance(metadata.get("layout"), dict):
+        mismatches.append("layout")
     if metadata.get("modelType") not in RESIDUAL_BLOCKS:
         mismatches.append("modelType")
     if mismatches:

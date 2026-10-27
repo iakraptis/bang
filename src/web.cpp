@@ -170,6 +170,19 @@ const JsonValue::Array& JsonArray(const JsonValue& value,
   return *array;
 }
 
+std::optional<GameMode> OptionalMode(const JsonValue::Object& object) {
+  const auto found = object.find("mode");
+  if (found == object.end()) return std::nullopt;
+  const auto* name = std::get_if<std::string>(&found->second.storage());
+  if (name == nullptr) throw std::invalid_argument("mode must be a string");
+  return GameModeFromName(*name);
+}
+
+// The faction a player plays (Law, Outlaw or Renegades), for labels.
+std::string SeatName(GameMode mode, int player) {
+  return std::string(FactionName(SeatFaction(static_cast<Side>(player), mode)));
+}
+
 std::optional<int> OptionalInt(const JsonValue::Object& object,
                                const std::string& key) {
   const auto found = object.find(key);
@@ -197,6 +210,11 @@ std::string PhaseName(Phase phase) {
     case Phase::kChooseStealing: return "choose_stealing";
     case Phase::kChooseAbility: return "choose_ability";
     case Phase::kTerminal: return "terminal";
+    case Phase::kChooseSwitch: return "choose_switch";
+    case Phase::kChooseUnionPacific: return "choose_union_pacific";
+    case Phase::kChooseAmbush: return "choose_ambush";
+    case Phase::kChooseSlap: return "choose_slap";
+    case Phase::kChooseDutchHarry: return "choose_dutch_harry";
   }
   throw std::logic_error("unknown phase");
 }
@@ -219,6 +237,11 @@ std::string PhaseLabel(Phase phase) {
     case Phase::kChooseStealing: return "Choose a card back or Equipment";
     case Phase::kChooseAbility: return "Resolve a character ability";
     case Phase::kTerminal: return "The duel is over";
+    case Phase::kChooseSwitch: return "Choose which side Switch swaps";
+    case Phase::kChooseUnionPacific: return "Choose a deck to draw from";
+    case Phase::kChooseAmbush: return "Choose Equipment to discard";
+    case Phase::kChooseSlap: return "Choose what Slap discards";
+    case Phase::kChooseDutchHarry: return "Dutch Harry: keep this card?";
   }
   throw std::logic_error("unknown phase");
 }
@@ -254,6 +277,22 @@ std::string PhaseHint(Phase phase) {
       return "Your Shotgun shot was avoided. Swap either your own two "
              "characters or the opponent's — the active one becomes the "
              "rearguard and back.";
+    case Phase::kChooseSwitch:
+      return "Switch swaps up to two sides, each at most once, in the order "
+             "you choose.";
+    case Phase::kChooseUnionPacific:
+      return "Draw your cards one at a time, each from your deck or the "
+             "opponent's (Union Pacific, The Marshal).";
+    case Phase::kChooseAmbush:
+      return "Ambush discards 1 card in play from your active character, then "
+             "1 from any active character. Either may be skipped.";
+    case Phase::kChooseDutchHarry:
+      return "Dutch Harry looks at each card before drawing it. Keep it, or "
+             "discard it and take the next card, which must be kept.";
+    case Phase::kChooseSlap:
+      return "Slap discards 1 card in play from any active character, then 1 "
+             "card from a hand: yours by choice, the opponent's at random by "
+             "card back. Either may be skipped.";
     case Phase::kDuelResponse:
       return "The Duel goes back and forth: discard a card that can shoot to "
              "keep it running, or concede and lose 1 life.";
@@ -378,6 +417,39 @@ AbilityPrompt AbilityPromptFor(const GameState& state) {
       prompt.skip = "Skip the draw";
       prompt.skip_detail = "Let the swap pass without drawing";
       break;
+    case CharacterName::kKittyLeroy:
+      if (has_kind(ActionKind::kUseResource)) {
+        prompt.label = "Kitty Leroy: aim the repeat";
+        prompt.hint = "The Resource's effect happens a second time. Choose its target.";
+      } else {
+        prompt.label = "Kitty Leroy: repeat this Resource?";
+        prompt.hint =
+            "Once per turn, Kitty Leroy may discard 1 card from her hand to "
+            "repeat the effect of the Resource she is using.";
+        prompt.pick_detail = "Discard it to repeat the Resource's effect";
+        prompt.skip = "Use it once";
+        prompt.skip_detail = "Keep your hand";
+      }
+      break;
+    case CharacterName::kPokerAlicia:
+      prompt.label = "Poker Alicia: take Equipment instead of drawing?";
+      prompt.hint =
+          "Instead of drawing her cards this turn, Poker Alicia may take 1 "
+          "Equipment card in play from either active character into her hand.";
+      prompt.skip = "Draw as usual";
+      prompt.skip_detail = "Draw your cards from the deck";
+      prompt.pick_detail = "Take it into your hand instead of drawing";
+      break;
+    case CharacterName::kJimLonghair:
+      prompt.label = "Jim Longhair: swap the opponent too?";
+      prompt.hint =
+          "Your active and reserve characters just swapped, so Jim Longhair "
+          "may swap the opponent's active and reserve characters as well.";
+      prompt.accept = "Swap the opponent";
+      prompt.accept_detail = "Their reserve character becomes active";
+      prompt.skip = "Leave them";
+      prompt.skip_detail = "Only your side moves";
+      break;
     case CharacterName::kPatGarret:
       prompt.label = "Pat Garret: raid the opponent's deck?";
       prompt.hint =
@@ -479,6 +551,7 @@ std::string RevealReasonName(GameState::RevealReason reason) {
     case GameState::RevealReason::kDynamite: return "dynamite";
     case GameState::RevealReason::kRattlesnake: return "rattlesnake";
     case GameState::RevealReason::kSidCurry: return "sid_curry";
+    case GameState::RevealReason::kWhiskey: return "whiskey";
   }
   throw std::logic_error("unknown reveal reason");
 }
@@ -498,6 +571,7 @@ std::string CardKindName(CardKind kind) {
     case CardKind::kAction: return "action";
     case CardKind::kEquipment: return "equipment";
     case CardKind::kBang: return "bang";
+    case CardKind::kResource: return "resource";
   }
   throw std::logic_error("unknown card kind");
 }
@@ -567,6 +641,7 @@ std::string ActionKindName(ActionKind kind) {
     case ActionKind::kSelectCard: return "select_card";
     case ActionKind::kPlayAsColt: return "play_as_colt";
     case ActionKind::kUseAbility: return "use_ability";
+    case ActionKind::kUseResource: return "use_resource";
   }
   throw std::logic_error("unknown action kind");
 }
@@ -625,8 +700,23 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       const bool accept = action.card_instance == 1;
       result["accept"] = accept;
       if (state.CurrentPhase() == Phase::kDuelResponse && !accept) {
-        label = "Concede the Duel";
-        detail = "Lose 1 life";
+        label = state.RicochetActive() ? "Stop the Ricochet" : "Concede the Duel";
+        detail = "Your active character loses 1 life";
+      } else if (state.CurrentPhase() == Phase::kChooseSwitch) {
+        label = accept ? "Swap the other side too" : "Stop here";
+        detail = accept ? "Switch's second swap" : "Keep the other side as it is";
+      } else if (state.CurrentPhase() == Phase::kChooseDutchHarry) {
+        const std::string looked =
+            state.ChoiceCards().empty()
+                ? std::string("it")
+                : std::string(GetCard(GetCardInstance(state.ChoiceCards().front()).name).display_name);
+        label = accept ? "Keep " + looked : "Discard it, take the next";
+        detail = accept ? "Draw the card you looked at"
+                        : "The next card is drawn unseen and must be kept";
+      } else if (state.CurrentPhase() == Phase::kChooseAmbush ||
+                 state.CurrentPhase() == Phase::kChooseSlap) {
+        label = "Skip";
+        detail = "Discard nothing here";
       } else if (!ability.label.empty()) {
         label = accept ? ability.accept : ability.skip;
         detail = accept ? ability.accept_detail : ability.skip_detail;
@@ -638,8 +728,13 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       break;
     }
     case ActionKind::kChooseSwap:
-      label = action.card_instance == 1 ? "Swap opponent characters" :
-                                         "Swap your characters";
+      if (state.CurrentPhase() == Phase::kChooseUnionPacific) {
+        label = action.card_instance == 1 ? "Draw from the opponent's deck"
+                                          : "Draw from your deck";
+      } else {
+        label = action.card_instance == 1 ? "Swap opponent characters" :
+                                           "Swap your characters";
+      }
       break;
     case ActionKind::kChooseCardBack:
       label = action.card_instance == 0 ? "Choose a Law card back" :
@@ -670,6 +765,12 @@ JsonValue ActionJson(const GameState& state, int action_id) {
                   ? "Play " + std::string(card.display_name) + " as Colt"
                   : "Play " + std::string(card.display_name);
       detail = "Target: " + target;
+      const auto& hand = state.Players()[static_cast<std::size_t>(state.CurrentPlayer())].hand;
+      if (action.kind == ActionKind::kPlayAsColt &&
+          std::find(hand.begin(), hand.end(), action.card_instance) == hand.end()) {
+        label = "Mystic Maid: discard " + std::string(card.display_name) + " as Colt";
+        detail += ", then draw 1";
+      }
       // Pearl Hat replays a card off the discard pile rather than playing one
       // out of hand — say so instead of pretending she holds it.
       if (!ability.label.empty()) {
@@ -691,12 +792,30 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       if (action.kind == ActionKind::kDiscardCard) label = "Discard " + std::string(card.display_name);
       if (action.kind == ActionKind::kAvoidHit) label = "Respond with " + std::string(card.display_name);
       if (action.kind == ActionKind::kSelectCard) label = "Choose " + std::string(card.display_name);
+      if (action.kind == ActionKind::kSelectCard && state.CurrentPhase() == Phase::kRespondToHit) {
+        label = "Mystic Maid: discard " + std::string(card.display_name);
+      }
       if (action.kind != ActionKind::kReloadCard &&
           action.kind != ActionKind::kAvoidHit) {
         detail = ability.pick_detail;
       }
+      if (action.kind == ActionKind::kSelectCard && state.CurrentPhase() == Phase::kRespondToHit) {
+        detail = "It counts as the avoid or hit card this needs; then draw 1";
+      }
       result["card"] = CardJson(action.card_instance);
       result["cardInstance"] = action.card_instance;
+      break;
+    }
+    case ActionKind::kUseResource: {
+      const auto& card = GetCard(GetCardInstance(action.card_instance).name);
+      label = "Use " + std::string(card.display_name);
+      detail = action.target == static_cast<int>(Target::kOwnActive)
+                   ? "Discard it from play for its effect"
+                   : "Target: " + TargetLabel(static_cast<Target>(action.target));
+      result["card"] = CardJson(action.card_instance);
+      result["cardInstance"] = action.card_instance;
+      result["target"] = TargetName(static_cast<Target>(action.target));
+      result["targetLabel"] = TargetLabel(static_cast<Target>(action.target));
       break;
     }
     case ActionKind::kUseAbility: {
@@ -715,9 +834,9 @@ JsonValue ActionJson(const GameState& state, int action_id) {
 // What a card flipped off a deck did, in words. Several effects reveal for the
 // same "Barrel" symbol (a Barrel card, Sid Curry's ability), so the line names
 // the effect, the card, whose deck it came from, and the outcome.
-std::string RevealText(const GameState::RevealEvent& event) {
+std::string RevealText(const GameState::RevealEvent& event, GameMode mode) {
   const auto& card = GetCard(GetCardInstance(event.card_instance).name);
-  std::string side(SideName(static_cast<Side>(event.player)));
+  std::string side = SeatName(mode, event.player);
   if (!side.empty()) {
     side.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(side.front())));
   }
@@ -742,6 +861,10 @@ std::string RevealText(const GameState::RevealEvent& event) {
       return "Rattlesnake reveals " + drawn +
              (event.triggered ? ": a Snake symbol, so it bites for 1 life"
                               : ": no Snake symbol, so no bite");
+    case GameState::RevealReason::kWhiskey:
+      return "Whiskey reveals " + drawn +
+             (event.triggered ? ": a Horseshoe, so the active character regains 2 life"
+                              : ": no Horseshoe, so the active character regains 1 life");
   }
   return "Reveals " + drawn;
 }
@@ -801,15 +924,24 @@ struct WebSession {
   std::uint64_t last_touch = 0;
 
   WebSession(std::string session_id, std::uint64_t session_seed,
-             int human, int characters)
+             int human, int characters, GameMode game_mode)
       : id(std::move(session_id)),
         seed(session_seed),
         human_player(human),
         characters_per_side(characters),
         state(GameConfig{.seed = session_seed,
+                         .mode = game_mode,
                          .characters_per_side = characters}),
         bot_rng(session_seed ^ 0xa0761d6478bd642fULL) {}
 };
+
+JsonValue HandBacksJson(const std::vector<int>& hand) {
+  JsonValue::Array backs;
+  for (const int instance : hand) {
+    backs.emplace_back(std::string(SideName(GetCardInstance(instance).origin)));
+  }
+  return backs;
+}
 
 bool ValidSessionId(const std::string& id) {
   if (id.empty() || id.size() > 64) return false;
@@ -906,7 +1038,8 @@ class BangWebApp {
 
   JsonValue NewSession(std::optional<int> requested_seed,
                        std::optional<int> requested_human,
-                       std::optional<int> requested_characters) {
+                       std::optional<int> requested_characters,
+                       std::optional<GameMode> requested_mode = std::nullopt) {
     EvictIfFull();
     const int human = requested_human.value_or(0);
     if (human < 0 || human >= kSideCount) {
@@ -919,10 +1052,12 @@ class BangWebApp {
     const std::uint64_t seed = requested_seed.has_value() && *requested_seed > 0
                                    ? static_cast<std::uint64_t>(*requested_seed)
                                    : session_rng_.NextU64() & 0x7fffffffULL;
-    auto session = std::make_unique<WebSession>(NewSessionId(), seed, human, characters);
+    auto session =
+        std::make_unique<WebSession>(NewSessionId(), seed, human, characters,
+                                     requested_mode.value_or(config_.mode));
     AppendLog(*session, -1,
               "New duel. You command the " +
-                  std::string(SideName(static_cast<Side>(human))) + " side.",
+                  SeatName(session->state.Mode(), human) + " side.",
               "");
     AdvanceAutomaticActions(*session);
     session->last_touch = ++touch_counter_;
@@ -1023,6 +1158,7 @@ class BangWebApp {
         {"seed", static_cast<double>(session.seed)},
         {"humanPlayer", session.human_player},
         {"charactersPerSide", session.characters_per_side},
+        {"mode", static_cast<int>(session.state.Mode())},
         {"actions", std::move(actions)},
         {"log", std::move(log)},
     };
@@ -1083,8 +1219,9 @@ class BangWebApp {
       if (seed == nullptr || !human.has_value() || !characters.has_value()) {
         throw std::runtime_error("journal is missing fields");
       }
+      const auto mode = static_cast<GameMode>(OptionalInt(journal, "mode").value_or(0));
       auto session = std::make_unique<WebSession>(
-          id, static_cast<std::uint64_t>(*seed), *human, *characters);
+          id, static_cast<std::uint64_t>(*seed), *human, *characters, mode);
       // Perturb the bot RNG so a restored bot does not replay the exact
       // random stream it already consumed before the restart.
       session->bot_rng = FastRng(session->seed ^ 0x9e3779b97f4a7c15ULL ^
@@ -1179,7 +1316,7 @@ class BangWebApp {
     // Reveals the engine resolved during this action, in the order it did.
     for (const auto& event : session.state.RevealEvents()) {
       if (event.sequence <= last_reveal) continue;
-      AppendLog(session, RevealOwner(event), RevealText(event),
+      AppendLog(session, RevealOwner(event), RevealText(event, session.state.Mode()),
                 "reveal(" + RevealReasonName(event.reason) + "," +
                     std::string(GetCard(GetCardInstance(event.card_instance).name).key) +
                     "," + (event.triggered ? "triggered" : "missed") + ")");
@@ -1328,8 +1465,10 @@ class BangWebApp {
         session.state.KnownHandCards(session.human_player, player);
     return JsonValue::Object{
         {"player", player},
-        {"side", std::string(SideName(state.side))},
+        {"side", SeatName(session.state.Mode(), player)},
         {"isHuman", player == session.human_player},
+        // Card backs are public: the Renegades' hand mixes both kinds.
+        {"handBacks", HandBacksJson(state.hand)},
         {"activePosition", reveal_characters ? JsonValue(state.active_position)
                                               : JsonValue(nullptr)},
         {"positions", std::move(positions)},
@@ -1365,8 +1504,7 @@ class BangWebApp {
           {"player", entry.player < 0 ? JsonValue(nullptr) : JsonValue(entry.player)},
           {"side", entry.player < 0
                        ? JsonValue("system")
-                       : JsonValue(std::string(
-                             SideName(static_cast<Side>(entry.player))))},
+                       : JsonValue(SeatName(session.state.Mode(), entry.player))},
           {"text", entry.text},
           {"engineText", entry.engine_text},
           {"sequence", static_cast<double>(entry.sequence)},
@@ -1394,23 +1532,30 @@ class BangWebApp {
       });
     }
 
+    // Ricochet runs in the Duel's phase but asks for avoid cards.
+    const bool ricochet = session.state.CurrentPhase() == Phase::kDuelResponse &&
+                          session.state.RicochetActive();
     JsonValue::Object result{
         {"sessionId", session.id},
         {"seed", static_cast<double>(session.seed)},
         {"humanPlayer", session.human_player},
         {"charactersPerSide", session.characters_per_side},
+        {"mode", std::string(GameModeName(session.state.Mode()))},
         {"currentPlayer", session.state.IsTerminal()
                               ? JsonValue(nullptr)
                               : JsonValue(session.state.CurrentPlayer())},
         {"turnPlayer", session.state.TurnPlayer()},
         {"turnNumber", session.state.TurnNumber()},
         {"phase", PhaseName(session.state.CurrentPhase())},
-        {"phaseLabel", ability.label.empty()
-                           ? PhaseLabel(session.state.CurrentPhase())
-                           : ability.label},
-        {"phaseHint", ability.hint.empty()
-                          ? PhaseHint(session.state.CurrentPhase())
-                          : ability.hint},
+        {"phaseLabel", !ability.label.empty() ? ability.label
+                       : ricochet ? std::string("Ricochet: discard an avoid card or lose 1 life")
+                                  : PhaseLabel(session.state.CurrentPhase())},
+        {"phaseHint", !ability.hint.empty() ? ability.hint
+                      : ricochet
+                          ? std::string("Ricochet goes back and forth: discard an avoid card "
+                                        "(Missed!, a Hat, an avoid Resource) to pass it on, or "
+                                        "stop and your active character loses 1 life.")
+                          : PhaseHint(session.state.CurrentPhase())},
         {"phaseCharacter",
          session.state.PendingAbilityCharacter() >= 0
              ? CharacterJson(session.state.PendingAbilityCharacter())
@@ -1630,7 +1775,8 @@ void HandleClient(SocketHandle client, BangWebApp& app, const WebConfig& config)
       SendJson(client, 200,
                app.NewSession(OptionalInt(body, "seed"),
                               OptionalInt(body, "humanPlayer"),
-                              OptionalInt(body, "charactersPerSide")));
+                              OptionalInt(body, "charactersPerSide"),
+                              OptionalMode(body)));
       return;
     }
     if (request.method == "POST" && EndsWith(request.path, "/action")) {
