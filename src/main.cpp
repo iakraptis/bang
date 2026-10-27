@@ -6,9 +6,12 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -104,6 +107,67 @@ int ChooseBenchmarkAction(const BenchmarkAgent& agent, const bang::GameState& st
   return legal.back();
 }
 
+/* ---------------- benchmark statistics ----------------
+   Measured from the outside: each move is compared with the state before it,
+   so the engine needs no instrumentation. Everything is per seat. */
+
+struct SeatTally {
+  double games = 0, wins = 0;
+  double drawn = 0;      // from a deck, the common deck or a looked-at choice
+  double taken = 0;      // from the opponent's hand or any card in play
+  double recovered = 0;  // from the discard pile (Gold Pan, Schoolmarm…)
+  double damage_dealt = 0, damage_taken = 0, eliminations_suffered = 0;
+  double cards_played = 0, resources_used = 0, avoid_responses = 0;
+};
+
+struct UsageTally {
+  double games = 0, wins = 0, uses = 0;
+};
+
+// Where every card is: 1 a draw pile or choice, 2/3 a hand, 4 in play, 5 discard.
+std::array<std::int8_t, bang::kCardInstanceCount> LocateCards(const bang::GameState& state) {
+  std::array<std::int8_t, bang::kCardInstanceCount> where{};
+  const auto mark = [&](const std::vector<int>& cards, std::int8_t code) {
+    for (const int card : cards) where[static_cast<std::size_t>(card)] = code;
+  };
+  mark(state.CommonDeck(), 1);
+  mark(state.ChoiceCards(), 1);
+  mark(state.CardsSetAside(), 1);
+  mark(state.DiscardPile(), 5);
+  for (int seat = 0; seat < bang::kSideCount; ++seat) {
+    const auto& player = state.Players()[static_cast<std::size_t>(seat)];
+    mark(player.deck, 1);
+    mark(player.hand, static_cast<std::int8_t>(2 + seat));
+    for (const auto& position : player.positions) mark(position.equipment, 4);
+  }
+  return where;
+}
+
+// "law:sharps", "outlaw:sharps" or "sharps" (both seats) → seats and key.
+std::pair<std::vector<int>, std::string> ParseSeatKey(const std::string& text) {
+  const auto colon = text.find(':');
+  if (colon == std::string::npos) return {{0, 1}, text};
+  const std::string seat = text.substr(0, colon);
+  if (seat != "law" && seat != "outlaw") {
+    throw std::invalid_argument("seat must be law (first) or outlaw (second): " + text);
+  }
+  return {{seat == "law" ? 0 : 1}, text.substr(colon + 1)};
+}
+
+bang::CardName CardByKey(const std::string& key) {
+  for (const auto& card : bang::Cards()) {
+    if (card.key == key) return card.name;
+  }
+  throw std::invalid_argument("unknown card key: " + key);
+}
+
+int CharacterByKey(const std::string& key) {
+  for (const auto& character : bang::Characters()) {
+    if (character.key == key) return character.id;
+  }
+  throw std::invalid_argument("unknown character key: " + key);
+}
+
 // Agent A against agent B in one format, on paired seeds: each deal is
 // played twice with the seats swapped, so deal luck cancels out.
 int RunBenchmark(const std::vector<std::string>& arguments) {
@@ -114,6 +178,9 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
   std::uint64_t seed = 900001;
   int characters = 4;
   bool greedy = false;
+  std::string stats_path;
+  std::array<std::vector<bang::CardName>, bang::kSideCount> excluded_cards{};
+  std::array<std::vector<int>, bang::kSideCount> excluded_characters{};
   int threads = static_cast<int>(std::max(1U, std::thread::hardware_concurrency()));
   for (std::size_t index = 0; index < arguments.size(); ++index) {
     const std::string& option = arguments[index];
@@ -139,6 +206,16 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
       threads = std::max(1, std::stoi(value()));
     } else if (option == "--greedy") {
       greedy = true;
+    } else if (option == "--stats") {
+      stats_path = value();
+    } else if (option == "--exclude-card") {
+      const auto [seats, key] = ParseSeatKey(value());
+      for (const int seat : seats) excluded_cards[static_cast<std::size_t>(seat)].push_back(CardByKey(key));
+    } else if (option == "--exclude-character") {
+      const auto [seats, key] = ParseSeatKey(value());
+      for (const int seat : seats) {
+        excluded_characters[static_cast<std::size_t>(seat)].push_back(CharacterByKey(key));
+      }
     } else {
       throw std::invalid_argument("unknown benchmark option: " + option);
     }
@@ -152,6 +229,10 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
   long long truncated = 0;
   long long decisions = 0;
   long long failed = 0;
+  std::array<SeatTally, 2> seat_stats{};
+  std::array<std::map<std::string, UsageTally>, 2> card_usage{};
+  std::array<std::map<std::string, UsageTally>, 2> character_usage{};
+  double total_turns = 0;
   std::mutex mutex;
   std::atomic<int> next{0};
   const auto start = std::chrono::steady_clock::now();
@@ -162,19 +243,104 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
         config.seed = seed + static_cast<std::uint64_t>(pair);
         config.mode = mode;
         config.characters_per_side = characters;
+        config.excluded_cards = excluded_cards;
+        config.excluded_characters = excluded_characters;
         bang::GameState state(config);
         bang::FastRng rng(config.seed * 0x9e3779b97f4a7c15ULL + static_cast<std::uint64_t>(a_seat));
         long long steps = 0;
         std::vector<std::string> recent;  // the last moves, for error reports
+        std::array<SeatTally, 2> game{};
+        std::array<std::map<std::string, double>, 2> played{};
+        std::array<std::set<int>, 2> fielded{};
+        const auto field = [&] {
+          for (int seat = 0; seat < 2; ++seat) {
+            for (const auto& position : state.Players()[static_cast<std::size_t>(seat)].positions) {
+              if (position.character_id >= 0 && position.life > 0) {
+                fielded[static_cast<std::size_t>(seat)].insert(position.character_id);
+              }
+            }
+          }
+        };
         try {
+          field();
           while (!state.IsTerminal() && steps < 20000) {
-            const BenchmarkAgent& actor = state.CurrentPlayer() == a_seat ? a : b;
+            const int actor_seat = state.CurrentPlayer();
+            const BenchmarkAgent& actor = actor_seat == a_seat ? a : b;
             const int action = ChooseBenchmarkAction(actor, state, rng, greedy);
-            recent.push_back("p" + std::to_string(state.CurrentPlayer()) + " " +
+            recent.push_back("p" + std::to_string(actor_seat) + " " +
                              bang::ActionToString(action));
             if (recent.size() > 8) recent.erase(recent.begin());
+
+            // What the move does with a card, before it moves.
+            const auto key = bang::DecodeAction(action);
+            auto& mine = game[static_cast<std::size_t>(actor_seat)];
+            const bool card_move = key.kind == bang::ActionKind::kPlayCard ||
+                                   key.kind == bang::ActionKind::kPlayAsColt ||
+                                   key.kind == bang::ActionKind::kUseResource;
+            if (card_move && state.CurrentPhase() == bang::Phase::kPlay) {
+              const auto& card = bang::GetCard(bang::GetCardInstance(key.card_instance).name);
+              ++mine.cards_played;
+              played[static_cast<std::size_t>(actor_seat)][std::string(card.key)] += 1;
+              if (key.kind == bang::ActionKind::kUseResource) ++mine.resources_used;
+            }
+            if (key.kind == bang::ActionKind::kAvoidHit ||
+                (key.kind == bang::ActionKind::kSelectCard &&
+                 state.CurrentPhase() == bang::Phase::kRespondToHit)) {
+              ++mine.avoid_responses;
+              const auto& card = bang::GetCard(bang::GetCardInstance(key.card_instance).name);
+              played[static_cast<std::size_t>(actor_seat)][std::string(card.key)] += 1;
+              if (card.kind == bang::CardKind::kResource) ++mine.resources_used;
+            }
+
+            const auto before = LocateCards(state);
+            std::array<std::array<std::pair<int, int>, 2>, 2> lives{};
+            for (int seat = 0; seat < 2; ++seat) {
+              for (int position = 0; position < 2; ++position) {
+                const auto& slot = state.Players()[static_cast<std::size_t>(seat)]
+                                       .positions[static_cast<std::size_t>(position)];
+                lives[static_cast<std::size_t>(seat)][static_cast<std::size_t>(position)] = {
+                    slot.character_id, slot.life};
+              }
+            }
             state.ApplyAction(action);
             ++steps;
+
+            const auto after = LocateCards(state);
+            for (std::size_t card = 0; card < after.size(); ++card) {
+              for (int seat = 0; seat < 2; ++seat) {
+                const auto hand = static_cast<std::int8_t>(2 + seat);
+                if (after[card] != hand || before[card] == hand) continue;
+                auto& tally = game[static_cast<std::size_t>(seat)];
+                if (before[card] == 1) {
+                  ++tally.drawn;
+                } else if (before[card] == 5) {
+                  ++tally.recovered;
+                } else {
+                  ++tally.taken;
+                }
+              }
+            }
+            for (int seat = 0; seat < 2; ++seat) {
+              for (int position = 0; position < 2; ++position) {
+                const auto [id, life] =
+                    lives[static_cast<std::size_t>(seat)][static_cast<std::size_t>(position)];
+                const auto& slot = state.Players()[static_cast<std::size_t>(seat)]
+                                       .positions[static_cast<std::size_t>(position)];
+                double lost = 0;
+                bool eliminated = false;
+                if (id >= 0 && slot.character_id != id) {
+                  lost = life;  // replaced from the reserve: the old one died
+                  eliminated = life > 0;
+                } else if (slot.life < life) {
+                  lost = life - slot.life;
+                  eliminated = slot.life <= 0;
+                }
+                game[static_cast<std::size_t>(seat)].damage_taken += lost;
+                game[static_cast<std::size_t>(1 - seat)].damage_dealt += lost;
+                if (eliminated) ++game[static_cast<std::size_t>(seat)].eliminations_suffered;
+              }
+            }
+            field();
           }
         } catch (const std::exception& error) {
           // An engine error is a bug: report the game and keep benchmarking.
@@ -190,8 +356,38 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
         decisions += steps;
         if (!state.IsTerminal()) {
           ++truncated;
-        } else {
-          ++wins[static_cast<std::size_t>(a_seat)][static_cast<std::size_t>(state.Winner())];
+          continue;
+        }
+        const int winner = state.Winner();
+        ++wins[static_cast<std::size_t>(a_seat)][static_cast<std::size_t>(winner)];
+        total_turns += state.TurnNumber();
+        for (int seat = 0; seat < 2; ++seat) {
+          const auto index = static_cast<std::size_t>(seat);
+          const double won = winner == seat ? 1.0 : 0.0;
+          auto& total = seat_stats[index];
+          const auto& one = game[index];
+          total.games += 1;
+          total.wins += won;
+          total.drawn += one.drawn;
+          total.taken += one.taken;
+          total.recovered += one.recovered;
+          total.damage_dealt += one.damage_dealt;
+          total.damage_taken += one.damage_taken;
+          total.eliminations_suffered += one.eliminations_suffered;
+          total.cards_played += one.cards_played;
+          total.resources_used += one.resources_used;
+          total.avoid_responses += one.avoid_responses;
+          for (const auto& [card, uses] : played[index]) {
+            auto& usage = card_usage[index][card];
+            usage.games += 1;
+            usage.wins += won;
+            usage.uses += uses;
+          }
+          for (const int character : fielded[index]) {
+            auto& usage = character_usage[index][std::string(bang::GetCharacter(character).key)];
+            usage.games += 1;
+            usage.wins += won;
+          }
         }
       }
     }
@@ -232,6 +428,48 @@ int RunBenchmark(const std::vector<std::string>& arguments) {
       {"seconds", seconds},
   };
   std::cout << result.Dump() << '\n';
+
+  if (!stats_path.empty()) {
+    bang::JsonValue::Array seats;
+    for (int seat = 0; seat < 2; ++seat) {
+      const auto index = static_cast<std::size_t>(seat);
+      const auto& total = seat_stats[index];
+      const double n = std::max(1.0, total.games);
+      const auto usage_json = [&](const std::map<std::string, UsageTally>& usage) {
+        bang::JsonValue::Object result;
+        for (const auto& [name, tally] : usage) {
+          result[name] = bang::JsonValue::Object{
+              {"games", tally.games}, {"wins", tally.wins}, {"uses", tally.uses}};
+        }
+        return result;
+      };
+      seats.emplace_back(bang::JsonValue::Object{
+          {"faction", std::string(bang::FactionName(bang::SeatFaction(static_cast<bang::Side>(seat), mode)))},
+          {"games", total.games},
+          {"winRate", total.wins / n},
+          {"drawnPerGame", total.drawn / n},
+          {"takenPerGame", total.taken / n},
+          {"recoveredPerGame", total.recovered / n},
+          {"damageDealtPerGame", total.damage_dealt / n},
+          {"damageTakenPerGame", total.damage_taken / n},
+          {"eliminationsSufferedPerGame", total.eliminations_suffered / n},
+          {"cardsPlayedPerGame", total.cards_played / n},
+          {"resourcesUsedPerGame", total.resources_used / n},
+          {"avoidResponsesPerGame", total.avoid_responses / n},
+          {"cards", usage_json(card_usage[index])},
+          {"characters", usage_json(character_usage[index])},
+      });
+    }
+    const double decided = std::max(1.0, seat_stats[0].games);
+    const bang::JsonValue stats = bang::JsonValue::Object{
+        {"summary", result},
+        {"turnsPerGame", total_turns / decided},
+        {"seats", std::move(seats)},
+    };
+    std::ofstream file(stats_path);
+    if (!file) throw std::runtime_error("cannot write " + stats_path);
+    file << stats.Dump() << '\n';
+  }
   return failed > 0 ? 1 : 0;
 }
 

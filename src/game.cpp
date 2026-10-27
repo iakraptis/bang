@@ -55,7 +55,14 @@ void GameState::InitializePlayers() {
   for (int player = 0; player < kSideCount; ++player) {
     auto& state = players_[static_cast<std::size_t>(player)];
     state.side = static_cast<Side>(player);
-    const auto expected_deck = StartingDeck(state.side, config_.mode);
+    auto expected_deck = StartingDeck(state.side, config_.mode);
+    const auto& excluded = config_.excluded_cards[static_cast<std::size_t>(player)];
+    // Only Renegade copies: the experiments weigh what the expansion adds.
+    std::erase_if(expected_deck, [&](int instance) {
+      const auto& copy = GetCardInstance(instance);
+      return copy.renegade &&
+             std::find(excluded.begin(), excluded.end(), copy.name) != excluded.end();
+    });
     state.deck = config_.starting_decks[static_cast<std::size_t>(player)];
     if (state.deck.empty()) {
       state.deck = expected_deck;
@@ -74,6 +81,10 @@ void GameState::InitializePlayers() {
     std::vector<int> roster = config_.character_rosters[static_cast<std::size_t>(player)];
     if (roster.empty()) {
       roster = CharacterIds(state.side, config_.mode);
+      const auto& left_out = config_.excluded_characters[static_cast<std::size_t>(player)];
+      std::erase_if(roster, [&](int character_id) {
+        return std::find(left_out.begin(), left_out.end(), character_id) != left_out.end();
+      });
       if (config_.shuffle_characters) rng_.Shuffle(roster);
       roster.resize(static_cast<std::size_t>(config_.characters_per_side));
       // The selected group is shuffled again before forming the reserve.

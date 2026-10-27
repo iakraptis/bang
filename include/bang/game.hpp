@@ -114,6 +114,10 @@ struct GameConfig {
   bool shuffle_characters = true;
   std::array<std::vector<int>, kSideCount> character_rosters{};
   std::array<std::vector<int>, kSideCount> starting_decks{};
+  // Balance experiments only: cards (the Renegade copies of each name) and
+  // characters left out of a seat's deck and roster. Empty for real games.
+  std::array<std::vector<CardName>, kSideCount> excluded_cards{};
+  std::array<std::vector<int>, kSideCount> excluded_characters{};
 };
 
 class GameState {

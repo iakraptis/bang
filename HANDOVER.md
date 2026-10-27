@@ -209,6 +209,12 @@ Against it, the shipped agent wins:
 A simple scripted bot now matches or beats the trained agent in The Third
 Group. That is the case for training on the expansion.
 
+The balance between the formats and the cards is analysed in
+[docs/renegades_balance.md](docs/renegades_balance.md): no rules bug was
+found, and Reinforcements favours the Outlaws with all three players. The
+experiments (`tools/renegades_balance/`) can be re-run with a newly trained
+policy.
+
 ## Known gaps and next steps
 
 1. **The AI was never trained on Renegade cards.** It plays them through the
