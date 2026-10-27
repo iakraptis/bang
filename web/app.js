@@ -336,7 +336,8 @@
     const spotlight = action.kind === "end_turn" && endTurnSpotlight && !countingDown ? "spotlight" : "";
     // While an ability is waiting on a yes/no, a bare ✓/✗ does not say what
     // either option does — spell the two choices out.
-    const named = action.kind === "optional" && game.phase === "choose_ability";
+    const named = action.kind === "optional" &&
+      ["choose_ability", "choose_dutch_harry", "choose_switch", "duel_response"].includes(game.phase);
     if (action.kind === "choose_back") {
       const side = sideClass(action.origin || "law");
       return `<button class="dock-btn deck-pick" data-action="${action.id}" ${busy ? "disabled" : ""}
@@ -389,6 +390,9 @@
   // What picking this card would do, when the pending decision is an ability
   // step (pay a cost, keep one of two draws, …) rather than a normal play.
   function pickNote(instance) {
+    // Mystic Maid turns her Equipment into a Colt or an avoid in any phase.
+    const maid = actionsForInstance(instance).find(action => action.label.startsWith("Mystic Maid"));
+    if (maid) return `${maid.label}${maid.detail ? ` — ${maid.detail}` : ""}.`;
     if (game.phase !== "choose_ability") return "";
     return actionsForInstance(instance).find(action => action.detail)?.detail || "";
   }

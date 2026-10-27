@@ -431,6 +431,15 @@ AbilityPrompt AbilityPromptFor(const GameState& state) {
         prompt.skip_detail = "Keep your hand";
       }
       break;
+    case CharacterName::kPokerAlicia:
+      prompt.label = "Poker Alicia: take Equipment instead of drawing?";
+      prompt.hint =
+          "Instead of drawing her cards this turn, Poker Alicia may take 1 "
+          "Equipment card in play from either active character into her hand.";
+      prompt.skip = "Draw as usual";
+      prompt.skip_detail = "Draw your cards from the deck";
+      prompt.pick_detail = "Take it into your hand instead of drawing";
+      break;
     case CharacterName::kJimLonghair:
       prompt.label = "Jim Longhair: swap the opponent too?";
       prompt.hint =
@@ -697,8 +706,13 @@ JsonValue ActionJson(const GameState& state, int action_id) {
         label = accept ? "Swap the other side too" : "Stop here";
         detail = accept ? "Switch's second swap" : "Keep the other side as it is";
       } else if (state.CurrentPhase() == Phase::kChooseDutchHarry) {
-        label = accept ? "Keep it" : "Discard it";
-        detail = accept ? "Draw the card you looked at" : "Take the next card instead";
+        const std::string looked =
+            state.ChoiceCards().empty()
+                ? std::string("it")
+                : std::string(GetCard(GetCardInstance(state.ChoiceCards().front()).name).display_name);
+        label = accept ? "Keep " + looked : "Discard it, take the next";
+        detail = accept ? "Draw the card you looked at"
+                        : "The next card is drawn unseen and must be kept";
       } else if (state.CurrentPhase() == Phase::kChooseAmbush ||
                  state.CurrentPhase() == Phase::kChooseSlap) {
         label = "Skip";
@@ -784,6 +798,9 @@ JsonValue ActionJson(const GameState& state, int action_id) {
       if (action.kind != ActionKind::kReloadCard &&
           action.kind != ActionKind::kAvoidHit) {
         detail = ability.pick_detail;
+      }
+      if (action.kind == ActionKind::kSelectCard && state.CurrentPhase() == Phase::kRespondToHit) {
+        detail = "It counts as the avoid or hit card this needs; then draw 1";
       }
       result["card"] = CardJson(action.card_instance);
       result["cardInstance"] = action.card_instance;
@@ -1515,6 +1532,9 @@ class BangWebApp {
       });
     }
 
+    // Ricochet runs in the Duel's phase but asks for avoid cards.
+    const bool ricochet = session.state.CurrentPhase() == Phase::kDuelResponse &&
+                          session.state.RicochetActive();
     JsonValue::Object result{
         {"sessionId", session.id},
         {"seed", static_cast<double>(session.seed)},
@@ -1527,12 +1547,15 @@ class BangWebApp {
         {"turnPlayer", session.state.TurnPlayer()},
         {"turnNumber", session.state.TurnNumber()},
         {"phase", PhaseName(session.state.CurrentPhase())},
-        {"phaseLabel", ability.label.empty()
-                           ? PhaseLabel(session.state.CurrentPhase())
-                           : ability.label},
-        {"phaseHint", ability.hint.empty()
-                          ? PhaseHint(session.state.CurrentPhase())
-                          : ability.hint},
+        {"phaseLabel", !ability.label.empty() ? ability.label
+                       : ricochet ? std::string("Ricochet: discard an avoid card or lose 1 life")
+                                  : PhaseLabel(session.state.CurrentPhase())},
+        {"phaseHint", !ability.hint.empty() ? ability.hint
+                      : ricochet
+                          ? std::string("Ricochet goes back and forth: discard an avoid card "
+                                        "(Missed!, a Hat, an avoid Resource) to pass it on, or "
+                                        "stop and your active character loses 1 life.")
+                          : PhaseHint(session.state.CurrentPhase())},
         {"phaseCharacter",
          session.state.PendingAbilityCharacter() >= 0
              ? CharacterJson(session.state.PendingAbilityCharacter())

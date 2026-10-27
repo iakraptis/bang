@@ -153,9 +153,16 @@ starts a fresh swap of the opponent's side.
 2. **The browser-only WASM build** (`bang_static_web_new_game`,
    `web/static-engine.js`) has no mode parameter, so it deals base games only.
    It was not rebuilt here; that needs Emscripten.
-3. **New choices show only generic prompts:** Dutch Harry's look, Kitty's
-   repeat, Switch and Ambush show as generic buttons. They have no special art
-   or 3D-stage animations. They work, as checked in headless Edge.
+3. **The new choices have clear prompts, but no 3D-stage animations.**
+   Each new choice was reached in a real browser duel and checked:
+   - Dutch Harry offers "Keep <card>" / "Discard it, take the next".
+   - Ricochet has its own text and a "Stop the Ricochet" button.
+   - Poker Alicia's prompt explains that skipping means drawing as usual.
+   - Mystic Maid's option is named in the tooltip of her Equipment.
+
+   What's still missing is dedicated animations on the 3D stage for the new
+   cards. Separately, at about 1400×900 the stage overlaps your own
+   characters' Equipment row. That layout issue predates the expansion.
 4. **Merge `expansion` into `main`** when the owner is happy with it.
 5. **Separate upstream fixes**, candidates for PRs to hmate9/bang, each on its
    own branch from `upstream/main`:
