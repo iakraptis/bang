@@ -1915,7 +1915,6 @@ void GameState::UseResource(int card_instance, Target target) {
   if (!CanUseResource(turn_player_, card_instance)) {
     throw std::logic_error("resource is not usable");
   }
-  RecordResourceUse(turn_player_, card_instance);
   const auto kitty = static_cast<std::size_t>(CharacterName::kKittyLeroy);
   if (IsCharacterAbilityActive(turn_player_, CharacterName::kKittyLeroy) &&
       !ability_used_this_turn_[kitty] &&
@@ -2027,9 +2026,12 @@ void GameState::ResolveResource(int card_instance, Target target, bool repeat) {
     }
     if (kitty_card) discard_.push_back(*kitty_card);
     RemoveEquipment(turn_player_, state.active_position, card_instance);
+    // Only now: a draw it triggers (Charlie Basset) may reshuffle the pile.
+    RecordResourceUse(turn_player_, card_instance);
     return;
   }
   RemoveEquipment(turn_player_, state.active_position, card_instance);
+  RecordResourceUse(turn_player_, card_instance);
   if (repeat) kitty_repeat_ = card_instance;
   ResolveResourceEffect(card_instance, target);
 }
@@ -2304,9 +2306,27 @@ std::vector<int> GameState::PearlHatActionsFor(int source_instance) const {
         opponent_state.positions[static_cast<std::size_t>(opponent_rear)].life > 0) {
       append(Target::kOpponentRearguard);
     }
+  } else if (card.name == CardName::kSwitch) {
+    // Only when some side can swap, as when it is played from the hand.
+    if (SwitchCanSwap(turn_player_) || SwitchCanSwap(opponent)) append(Target::kOwnActive);
+  } else if (card.name == CardName::kAmbush) {
+    if (!ActiveEquipmentInstances().empty()) append(Target::kOwnActive);
   } else {
     append(Target::kOwnActive);
   }
+  // The same target limits as a hand card: El Chindi's immunity, and Spurs
+  // against hits.
+  std::erase_if(actions, [&](int action_id) {
+    const auto key = DecodeAction(action_id);
+    if (key.target != static_cast<int>(Target::kOpponentActive) &&
+        key.target != static_cast<int>(Target::kOpponentRearguard)) {
+      return false;
+    }
+    const auto [target_player, target_position] =
+        ResolveTarget(turn_player_, static_cast<Target>(key.target));
+    return ElChindiImmune(target_player, target_position, turn_player_) ||
+           (card.has_hit && SpursShield(target_player, target_position));
+  });
   return actions;
 }
 

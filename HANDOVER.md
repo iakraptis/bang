@@ -143,6 +143,45 @@ starts a fresh swap of the opponent's side.
 - **Card conservation:** the random-play tests (Reinforcements and The Third
   Group) check after every move that no card is lost or duplicated.
 
+## Benchmark of the shipped agent (2026-10-28)
+
+`bang_duel benchmark` plays two players against each other in any format,
+without Torch. A player can be a policy JSON, `heuristic` or `random`. Each
+deal is played twice with the seats swapped, and any engine error is reported
+with its seed and last moves. Example:
+
+```
+bang_duel benchmark --mode renegades_vs_outlaw --a policy/static-policy.json --b heuristic --pairs 2000
+```
+
+What it showed for `policy/static-policy.json`, with sampled moves and 4,000
+games per row:
+
+| Format | vs heuristic | vs random | Against itself: first seat wins |
+|---|---|---|---|
+| base | 99.8% | 100% | 46.1% |
+| reinforcements | 99.7% | 99.8% | 37.5% |
+| renegades_vs_law | 98.7% (97.3% as Renegades) | 99.7% | 73.0% |
+| renegades_vs_outlaw | 96.2% (92.4% as Renegades) | 98.9% | 85.7% |
+
+How to read it:
+
+- **The heuristic and random play are too weak to measure skill.** The
+  heuristic has no code for any Renegade card.
+- **In The Third Group the agent plays the base side far better than the
+  Renegades.** It has never seen Renegade cards.
+- **These formats lean one way even without skill.** In mirrors of two random
+  players, the side with the base deck wins about 65% in The Third Group, and
+  the Law wins about 37.6% in Reinforcements. So part of the imbalance belongs
+  to the formats themselves (or to an undiscovered rules issue), not to the
+  agent.
+
+The benchmark also found two engine bugs, both fixed:
+
+- **Pearl Hat** copied Switch or Ambush even when they couldn't be played,
+  which softlocked the game. She also ignored El Chindi's immunity and Spurs.
+- **Gold Pan** crashed when Charlie Basset's draw reshuffled the discard pile.
+
 ## Known gaps and next steps
 
 1. **The AI was never trained on Renegade cards.** It plays them through the

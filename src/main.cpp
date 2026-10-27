@@ -1,16 +1,21 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "bang/game.hpp"
+#include "bang/heuristic.hpp"
 #include "bang/json.hpp"
 #include "bang/static_policy.hpp"
 #include "bang/web.hpp"
@@ -47,6 +52,187 @@ int ChooseSimulationAction(const bang::GameState& state, bang::FastRng& rng) {
     return bang::kEndPlayAction;
   }
   return legal[rng.USize(legal.size())];
+}
+
+// A player for `benchmark`: an exported browser policy (scored by the same
+// C++ the web game uses), the scripted heuristic, or uniformly random moves.
+struct BenchmarkAgent {
+  std::string name;
+  std::optional<bang::StaticPolicyNetwork> policy;
+  bool heuristic = false;
+};
+
+BenchmarkAgent LoadBenchmarkAgent(const std::string& spec) {
+  if (spec == "heuristic") return {spec, std::nullopt, true};
+  if (spec == "random") return {spec, std::nullopt, false};
+  return {spec, bang::LoadStaticPolicyFile(spec), false};
+}
+
+int ChooseBenchmarkAction(const BenchmarkAgent& agent, const bang::GameState& state,
+                          bang::FastRng& rng, bool greedy) {
+  const auto legal = state.LegalActions();
+  if (legal.empty()) {
+    throw std::logic_error("no legal actions in phase " +
+                           std::to_string(static_cast<int>(state.CurrentPhase())) +
+                           " for player " + std::to_string(state.CurrentPlayer()));
+  }
+  if (legal.size() == 1) return legal.front();
+  if (agent.heuristic) return bang::ChooseHeuristicAction(state, rng);
+  if (!agent.policy) return legal[rng.USize(legal.size())];
+  std::vector<bang::ActionFeature> features;
+  features.reserve(legal.size());
+  for (const int action : legal) features.push_back(bang::EncodeAction(action));
+  const std::vector<float> logits = bang::StaticPolicyLogits(
+      *agent.policy, state.TrainingObservationTensor(state.CurrentPlayer()), features);
+  if (greedy) {
+    return legal[static_cast<std::size_t>(
+        std::max_element(logits.begin(), logits.end()) - logits.begin())];
+  }
+  // Sampled, like the web game's default (stochastic) opponent.
+  const float maximum = *std::max_element(logits.begin(), logits.end());
+  std::vector<double> weights(logits.size());
+  double total = 0.0;
+  for (std::size_t index = 0; index < logits.size(); ++index) {
+    weights[index] = std::exp(static_cast<double>(logits[index] - maximum));
+    total += weights[index];
+  }
+  double pick = static_cast<double>(rng.NextU64() >> 11) * 0x1.0p-53 * total;
+  for (std::size_t index = 0; index < weights.size(); ++index) {
+    pick -= weights[index];
+    if (pick <= 0.0) return legal[index];
+  }
+  return legal.back();
+}
+
+// Agent A against agent B in one format, on paired seeds: each deal is
+// played twice with the seats swapped, so deal luck cancels out.
+int RunBenchmark(const std::vector<std::string>& arguments) {
+  std::string a_spec = "policy/static-policy.json";
+  std::string b_spec = "heuristic";
+  bang::GameMode mode = bang::GameMode::kBase;
+  int pairs = 500;
+  std::uint64_t seed = 900001;
+  int characters = 4;
+  bool greedy = false;
+  int threads = static_cast<int>(std::max(1U, std::thread::hardware_concurrency()));
+  for (std::size_t index = 0; index < arguments.size(); ++index) {
+    const std::string& option = arguments[index];
+    const auto value = [&]() -> const std::string& {
+      if (index + 1 >= arguments.size()) {
+        throw std::invalid_argument("missing value for " + option);
+      }
+      return arguments[++index];
+    };
+    if (option == "--a") {
+      a_spec = value();
+    } else if (option == "--b") {
+      b_spec = value();
+    } else if (option == "--mode") {
+      mode = bang::GameModeFromName(value());
+    } else if (option == "--pairs") {
+      pairs = std::stoi(value());
+    } else if (option == "--seed") {
+      seed = std::stoull(value());
+    } else if (option == "--characters") {
+      characters = std::stoi(value());
+    } else if (option == "--threads") {
+      threads = std::max(1, std::stoi(value()));
+    } else if (option == "--greedy") {
+      greedy = true;
+    } else {
+      throw std::invalid_argument("unknown benchmark option: " + option);
+    }
+  }
+  if (pairs <= 0) throw std::invalid_argument("pairs must be positive");
+  const BenchmarkAgent a = LoadBenchmarkAgent(a_spec);
+  const BenchmarkAgent b = LoadBenchmarkAgent(b_spec);
+
+  // wins[seat A sat in][winning seat]; truncated games count for neither.
+  std::array<std::array<long long, 2>, 2> wins{};
+  long long truncated = 0;
+  long long decisions = 0;
+  long long failed = 0;
+  std::mutex mutex;
+  std::atomic<int> next{0};
+  const auto start = std::chrono::steady_clock::now();
+  const auto worker = [&] {
+    for (int pair = next++; pair < pairs; pair = next++) {
+      for (int a_seat = 0; a_seat < 2; ++a_seat) {
+        bang::GameConfig config;
+        config.seed = seed + static_cast<std::uint64_t>(pair);
+        config.mode = mode;
+        config.characters_per_side = characters;
+        bang::GameState state(config);
+        bang::FastRng rng(config.seed * 0x9e3779b97f4a7c15ULL + static_cast<std::uint64_t>(a_seat));
+        long long steps = 0;
+        std::vector<std::string> recent;  // the last moves, for error reports
+        try {
+          while (!state.IsTerminal() && steps < 20000) {
+            const BenchmarkAgent& actor = state.CurrentPlayer() == a_seat ? a : b;
+            const int action = ChooseBenchmarkAction(actor, state, rng, greedy);
+            recent.push_back("p" + std::to_string(state.CurrentPlayer()) + " " +
+                             bang::ActionToString(action));
+            if (recent.size() > 8) recent.erase(recent.begin());
+            state.ApplyAction(action);
+            ++steps;
+          }
+        } catch (const std::exception& error) {
+          // An engine error is a bug: report the game and keep benchmarking.
+          std::lock_guard lock(mutex);
+          ++failed;
+          std::cerr << "game seed=" << config.seed << " a_seat=" << a_seat
+                    << " step=" << steps << " failed: " << error.what() << "\n  after:";
+          for (const auto& move : recent) std::cerr << ' ' << move << ';';
+          std::cerr << '\n';
+          continue;
+        }
+        std::lock_guard lock(mutex);
+        decisions += steps;
+        if (!state.IsTerminal()) {
+          ++truncated;
+        } else {
+          ++wins[static_cast<std::size_t>(a_seat)][static_cast<std::size_t>(state.Winner())];
+        }
+      }
+    }
+  };
+  std::vector<std::thread> pool;
+  for (int index = 0; index < threads; ++index) pool.emplace_back(worker);
+  for (auto& thread : pool) thread.join();
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+
+  const auto rate = [](long long won, long long played) {
+    return played > 0 ? static_cast<double>(won) / static_cast<double>(played) : 0.0;
+  };
+  const long long a_first_games = wins[0][0] + wins[0][1];
+  const long long a_second_games = wins[1][0] + wins[1][1];
+  const long long a_wins = wins[0][0] + wins[1][1];
+  const long long games = a_first_games + a_second_games;
+  const double a_rate = rate(a_wins, games);
+  // Standard error of A's win rate over the decided games.
+  const double error =
+      games > 0 ? std::sqrt(a_rate * (1.0 - a_rate) / static_cast<double>(games)) : 0.0;
+  const bang::JsonValue result = bang::JsonValue::Object{
+      {"mode", std::string(bang::GameModeName(mode))},
+      {"a", a.name},
+      {"b", b.name},
+      {"games", static_cast<double>(games)},
+      {"aWins", static_cast<double>(a_wins)},
+      {"aWinRate", a_rate},
+      {"aWinRateStdErr", error},
+      {"aWinRateFirstSeat", rate(wins[0][0], a_first_games)},
+      {"aWinRateSecondSeat", rate(wins[1][1], a_second_games)},
+      {"firstSeatWinRate", rate(wins[0][0] + wins[1][0], games)},
+      {"truncated", static_cast<double>(truncated)},
+      {"failed", static_cast<double>(failed)},
+      {"decisionsPerGame", games + truncated > 0 ? static_cast<double>(decisions) /
+                                                       static_cast<double>(games + truncated)
+                                                 : 0.0},
+      {"seconds", seconds},
+  };
+  std::cout << result.Dump() << '\n';
+  return failed > 0 ? 1 : 0;
 }
 
 int RunSimulation(int games, std::uint64_t seed, int characters_per_side) {
@@ -210,6 +396,8 @@ int main(int argc, char** argv) {
           << "  bang_duel web [port] [host] [--session-dir DIR]\n"
           << "  bang_duel web-smoke\n"
           << "  bang_duel static-policy-smoke STATIC_POLICY_JSON\n"
+          << "  bang_duel benchmark [--a POLICY.json|heuristic|random] [--b ...]"
+             " [--mode MODE] [--pairs N] [--seed S] [--greedy]\n"
 #ifdef BANG_ENABLE_TORCH
           << "  bang_duel train [--model v2|v3] [--iterations N]"
              " [--batch-games N] ...\n"
@@ -456,6 +644,9 @@ int main(int argc, char** argv) {
       config.stochastic_policy = false;
       std::cout << bang::RunWebSmokeTest(config).Dump() << '\n';
       return 0;
+    }
+    if (command == "benchmark") {
+      return RunBenchmark(std::vector<std::string>(argv + 2, argv + argc));
     }
     if (command != "simulate") {
       throw std::invalid_argument("unknown command: " + command);
