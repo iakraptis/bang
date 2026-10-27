@@ -182,6 +182,33 @@ The benchmark also found two engine bugs, both fixed:
   which softlocked the game. She also ignored El Chindi's immunity and Spurs.
 - **Gold Pan** crashed when Charlie Basset's draw reshuffled the discard pile.
 
+### A Renegades-aware heuristic
+
+The heuristic (`src/heuristic.cpp`) knows the Renegades. It scores:
+
+- **Resources:** placing them on its own side and using them.
+- **Action cards:** Switch, Union Pacific, Whiskey, Ricochet and Ambush, each
+  only when it helps.
+- **New choices:** Ambush, Slap and Poker Alicia picks; Dutch Harry's look; Jim
+  Longhair's swap; Kitty Leroy's payment.
+
+These rules apply **only outside the base game**. Base-game play is
+byte-identical; the benchmark checks this on fixed seeds. In the expansion
+formats it also stops gifting its helpful base Equipment (Barrel, Hat, Scope…)
+to the opponent. The base scoring still does that, which is a flaw of the
+original heuristic, left alone on purpose.
+
+Against it, the shipped agent wins:
+
+| Format | Agent's win rate | Agent's first-seat / second-seat win rate | Heuristic mirror: first seat wins |
+|---|---|---|---|
+| reinforcements | 70.2% | 58.3% / 82.2% | 34.2% |
+| renegades_vs_law | 50.5% | 50.4% / 50.5% (as Renegades) | 22.7% |
+| renegades_vs_outlaw | 45.6% | 64.4% / 26.9% (as Renegades) | 41.7% |
+
+A simple scripted bot now matches or beats the trained agent in The Third
+Group. That is the case for training on the expansion.
+
 ## Known gaps and next steps
 
 1. **The AI was never trained on Renegade cards.** It plays them through the

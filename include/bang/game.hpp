@@ -124,6 +124,8 @@ class GameState {
   GameMode Mode() const { return config_.mode; }
   // The Duel phase is resolving a Ricochet (avoid cards instead of hit cards).
   bool RicochetActive() const { return ricochet_; }
+  // The side a pending Switch offers to swap second, or -1.
+  int SwitchSecondPlayer() const { return switch_second_player_; }
 
   int CurrentPlayer() const;
   int TurnPlayer() const;
