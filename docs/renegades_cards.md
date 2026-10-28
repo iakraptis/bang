@@ -144,14 +144,18 @@ Per card:
 - **El Chindi** (user ruling): as the AC with cards in his owner's hand, he
   ignores the opponent's Action-card hits (Derringer, Duel, Knife, Gatling,
   Indians!, Ricochet's life loss, Return Fire's ⊛), being moved (Water, Switch)
-  and Strong Ale. Cards in play on him can still be taken or discarded.
+  and Strong Ale. The opponent's Stealing, Schoolmarm and Ambush cannot take or
+  discard his Equipment; Stealing may still take a random hand card. Slap is a
+  Resource, so it works on him. ("Handover" in the rulebook is Stealing.)
 - **Kitty Leroy** (user ruling): own turn only; she decides when using the
   Resource. A repeated hit picks a new target after the first hit resolves.
 - **Hick Addams** (implementation): draws for Ambush, Carbine, Peacemaker,
-  Slap, Slim Poet and a replaced duplicate Equipment; not for cards taken
-  (Stealing, Poker Alicia) or discarded to react.
-- **Mystic Maid** (implementation): any of her Equipment, Resources included,
-  answers a hit as ⊘ or ⊛ (not Sharps), a Duel or a Ricochet, or is played as
+  Slap, Slim Poet, Stealing discarding his Equipment, and a replaced duplicate
+  Equipment; not for cards taken (Stealing a hand card, Schoolmarm, Poker
+  Alicia) or discarded to react.
+- **Mystic Maid** (user ruling): "(not ⇄)" means she cannot discard ⇄ Equipment
+  (Rattlesnake, Dynamite, Stampede). Any of her other Equipment, Resources
+  included, answers a hit as ⊘ or ⊛ (not Sharps), a Duel or a Ricochet, or is played as
   the turn's Colt; she draws 1 card each time.
 - **The Marshal**: in the starting pair, the 3 cards come on top of the starting
   hand; each draw may come from any deck, chosen after seeing the previous one.
@@ -177,8 +181,9 @@ The base game remains the default and must play exactly as before.
 2. **Feint (RO copy)** prints its English subtitle as "FINTA"; cosmetic.
 3. **"Lighting"**: the official card list's spelling; the card says Lightning.
 4. **Backhander / Handover**: the rulebook's Slap entry calls the card
-   "Backhander", and El Chindi's note says he is immune to "Handover", a name
-   no Renegades card carries. Read as Slap until confirmed.
+   "Backhander". El Chindi's note says he is immune to "Handover": a typo for
+   Stealing (an Action card), per the owner, not Slap (a Resource, which does
+   work on him).
 
 ## Implementation status
 
@@ -226,6 +231,9 @@ Interpretations settled for this implementation:
   draws 1 card. This counts once per character per turn and works only while
   King Fishers is AC (the card has no ⇄).
 
+- **Resources** are a kind of Equipment (owner's ruling): whoever's character
+  a Resource sits on owns it, like a Rattlesnake given to the opponent, and
+  card effects that count Equipment, such as Fanning, count it too.
 - **Resources** work only on the AC, like blue Equipment: one on the RC
   cannot be used until its character becomes AC. A Resource is used by the
   owner of the character it sits on, so one placed on the opponent's AC is

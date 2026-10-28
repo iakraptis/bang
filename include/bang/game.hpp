@@ -450,6 +450,8 @@ class GameState {
   bool ElChindiImmune(int player, int position, int actor) const;
   // A Switch may swap this side (El Chindi can refuse it).
   bool SwitchCanSwap(int player) const;
+  // Whether `actor`'s Ambush has a card in play it may discard.
+  bool AmbushHasTarget(int actor) const;
   void ResolveResource(int card_instance, Target target, bool repeat);
   void ResolveResourceEffect(int card_instance, Target target);
   void FinishKittyLeroy(std::optional<int> hand_card);

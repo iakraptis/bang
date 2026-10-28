@@ -1855,6 +1855,75 @@ void TestThirdGroup() {
   Require(finished >= 72, "random Third Group games run to completion");
 }
 
+void TestOwnerRulingsOnRenegades() {
+  using CN = bang::CardName;
+  using CH = bang::CharacterName;
+  constexpr auto kMode = bang::GameMode::kReinforcements;
+  const auto id = [](CH name) { return static_cast<int>(name); };
+  const auto make = [&](std::vector<int> law_roster, std::vector<int> outlaw_roster,
+                        std::vector<CN> law, std::vector<CN> outlaw) {
+    auto config = DeterministicConfig();
+    config.mode = kMode;
+    config.character_rosters[0] = law_roster;
+    config.character_rosters[1] = outlaw_roster;
+    config.starting_decks[0] = DeckWithTop(bang::Side::kLaw, law, kMode);
+    config.starting_decks[1] = DeckWithTop(bang::Side::kOutlaw, outlaw, kMode);
+    bang::GameState state(config);
+    CompleteSetup(state);
+    return state;
+  };
+  const std::vector<CN> fillers{CN::kMissed, CN::kMissed, CN::kMissed,
+                                CN::kMissed, CN::kMissed, CN::kMissed};
+  {
+    // El Chindi keeps his Equipment against the opponent's Schoolmarm.
+    auto state = make({1, 9}, {16, id(CH::kElChindi)},
+                      {CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed,
+                       CN::kMissed, CN::kSchoolmarm},
+                      {CN::kLuckyPenny, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    EndCurrentTurn(state);
+    const int penny = HandCard(state, 1, CN::kLuckyPenny);
+    state.ApplyAction(bang::PlayCardAction(penny, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);
+    EndCurrentTurnKeeping(state, {CN::kMissed});
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 0, CN::kSchoolmarm),
+                                           bang::Target::kOwnActive));
+    const auto& outlaw = state.Players()[1];
+    const auto& chindi = outlaw.positions[static_cast<std::size_t>(outlaw.active_position)];
+    Require(!HasAction(state, bang::SelectCardAction(penny)) &&
+                std::find(chindi.equipment.begin(), chindi.equipment.end(), penny) !=
+                    chindi.equipment.end(),
+            "Schoolmarm cannot take El Chindi's Equipment");
+  }
+  {
+    // Hick Addams draws when Stealing discards his Equipment from play.
+    auto state = make({9, id(CH::kHickAddams)}, {12, 16},
+                      {CN::kHat, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed},
+                      {CN::kStealing, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    const int hat = HandCard(state, 0, CN::kHat);
+    state.ApplyAction(bang::PlayCardAction(hat, bang::Target::kOwnRearguard));
+    state.ApplyAction(bang::kSwapAction);  // Hick, wearing the Hat, becomes AC
+    EndCurrentTurnKeeping(state, {CN::kMissed});
+    state.ApplyAction(bang::PlayCardAction(HandCard(state, 1, CN::kStealing),
+                                           bang::Target::kOwnActive));
+    const auto hand = state.Players()[0].hand.size();
+    state.ApplyAction(bang::SelectCardAction(hat));
+    Require(state.DiscardPile().back() == hat && state.Players()[0].hand.size() == hand + 1,
+            "Hick Addams draws when Stealing discards his Equipment");
+  }
+  {
+    // Mystic Maid cannot discard ⇄ Equipment such as a Rattlesnake.
+    auto state = make({id(CH::kMysticMaid), 1}, {12, 16}, fillers,
+                      {CN::kRattlesnake, CN::kMissed, CN::kMissed, CN::kMissed, CN::kMissed});
+    EndCurrentTurn(state);
+    const int snake = HandCard(state, 1, CN::kRattlesnake);
+    state.ApplyAction(bang::PlayCardAction(snake, bang::Target::kOpponentActive));
+    EndCurrentTurn(state);
+    while (state.CurrentPhase() != bang::Phase::kPlay) state.ApplyAction(state.LegalActions().front());
+    Require(!HasAction(state, bang::PlayAsColtAction(snake, bang::Target::kOpponentActive)),
+            "Mystic Maid cannot shed a Rattlesnake as a Colt");
+  }
+}
+
 void TestHatAvoidsAndIsDiscarded() {
   auto config = DeterministicConfig();
   config.starting_decks[0] = DeckWithTop(
@@ -5565,6 +5634,7 @@ int main() {
     TestDutchHarryAndHickAddams();
     TestElChindiAndKittyLeroy();
     TestThirdGroup();
+    TestOwnerRulingsOnRenegades();
     TestBarrelRevealSuccessAndFailure();
     TestReturnFireCreatesCounterHit();
     TestRemingtonChoicePrecedesReturnFireCounter();

@@ -281,6 +281,19 @@ listings came up:
   absolute.
 - **Only 4-character rosters were tested.**
 
+## Rulings refined after this report
+
+After reviewing the rulings, the owner settled three points, now
+implemented. They change three characters slightly; the numbers above
+predate them:
+
+- **El Chindi** is also safe from the opponent's Stealing, Schoolmarm and
+  Ambush taking or discarding his Equipment. "Handover" in the rulebook is
+  Stealing.
+- **Mystic Maid** cannot discard ⇄ Equipment such as Rattlesnake.
+- **Hick Addams** now draws when Stealing discards his Equipment. This was an
+  implementation slip, not a ruling.
+
 ## Next steps
 
 1. **Keep the rules as they are.** Nothing points to a bug.

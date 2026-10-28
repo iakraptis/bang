@@ -313,6 +313,7 @@ std::vector<int> GameState::LegalActions() const {
     for (int player = 0; player < kSideCount; ++player) {
       if (ambush_stage_ == 0 && player != turn_player_) continue;
       const auto& side = players_[static_cast<std::size_t>(player)];
+      if (ElChindiImmune(player, side.active_position, turn_player_)) continue;
       for (const int instance :
            side.positions[static_cast<std::size_t>(side.active_position)].equipment) {
         result.push_back(SelectCardAction(instance));
@@ -705,12 +706,9 @@ std::vector<int> GameState::LegalActions() const {
           result.push_back(PlayCardAction(instance, Target::kOwnActive));
         }
       } else if (card.name == CardName::kAmbush) {
-        bool any_equipment = false;
-        for (const auto& side : players_) {
-          any_equipment |= !side.positions[static_cast<std::size_t>(side.active_position)]
-                                .equipment.empty();
+        if (AmbushHasTarget(decision_player_)) {
+          result.push_back(PlayCardAction(instance, Target::kOwnActive));
         }
-        if (any_equipment) result.push_back(PlayCardAction(instance, Target::kOwnActive));
       } else if (card.name == CardName::kUnionPacific ||
                  card.name == CardName::kWhiskey ||
                  card.name == CardName::kRicochet) {
@@ -1571,6 +1569,17 @@ bool GameState::ElChindiImmune(int player, int position, int actor) const {
          TargetHasAbility(player, position, CharacterName::kElChindi);
 }
 
+bool GameState::AmbushHasTarget(int actor) const {
+  for (int player = 0; player < kSideCount; ++player) {
+    const auto& side = players_[static_cast<std::size_t>(player)];
+    if (!side.positions[static_cast<std::size_t>(side.active_position)].equipment.empty() &&
+        !ElChindiImmune(player, side.active_position, actor)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool GameState::SwitchCanSwap(int player) const {
   return CanSwapSide(player) &&
          !ElChindiImmune(player, players_[static_cast<std::size_t>(player)].active_position,
@@ -2321,7 +2330,7 @@ std::vector<int> GameState::PearlHatActionsFor(int source_instance) const {
     // Only when some side can swap, as when it is played from the hand.
     if (SwitchCanSwap(turn_player_) || SwitchCanSwap(opponent)) append(Target::kOwnActive);
   } else if (card.name == CardName::kAmbush) {
-    if (!ActiveEquipmentInstances().empty()) append(Target::kOwnActive);
+    if (AmbushHasTarget(turn_player_)) append(Target::kOwnActive);
   } else {
     append(Target::kOwnActive);
   }
@@ -2428,7 +2437,13 @@ void GameState::FinishJimLonghair(bool swap) {
 std::vector<int> GameState::MysticMaidEquipment(int player) const {
   if (!IsCharacterAbilityActive(player, CharacterName::kMysticMaid)) return {};
   const auto& state = players_[static_cast<std::size_t>(player)];
-  return state.positions[static_cast<std::size_t>(state.active_position)].equipment;
+  std::vector<int> result;
+  // Not ⇄ Equipment: she cannot shed a Rattlesnake, Dynamite or Stampede.
+  for (const int instance :
+       state.positions[static_cast<std::size_t>(state.active_position)].equipment) {
+    if (!GetCard(GetCardInstance(instance).name).always_active) result.push_back(instance);
+  }
+  return result;
 }
 
 void GameState::FinishMysticMaidAvoid(int card_instance) {
@@ -2750,7 +2765,10 @@ std::vector<int> GameState::SelectableEquipment(int actor) const {
   const auto& opponent = players_[static_cast<std::size_t>(OtherPlayer(actor))];
   const auto& active =
       opponent.positions[static_cast<std::size_t>(opponent.active_position)];
-  result.insert(result.end(), active.equipment.begin(), active.equipment.end());
+  // Stealing and Schoolmarm are Action cards: El Chindi's Equipment is safe.
+  if (!ElChindiImmune(OtherPlayer(actor), opponent.active_position, actor)) {
+    result.insert(result.end(), active.equipment.begin(), active.equipment.end());
+  }
   if (IsCharacterAbilityActive(actor, CharacterName::kJackRansome)) {
     const int rear_position = 1 - opponent.active_position;
     const auto& rear = opponent.positions[static_cast<std::size_t>(rear_position)];
@@ -2842,6 +2860,7 @@ void GameState::FinishStealingEquipment(int equipment_instance) {
       if (std::find(equipment.begin(), equipment.end(), equipment_instance) !=
           equipment.end()) {
         RemoveEquipment(player, position, equipment_instance);
+        HickAddamsDraw(player, effect_actor_, position);
         if (BeginWildBillReaction(player, effect_actor_,
                                   ResumeKind::kEffectChoice, position)) {
           return;
